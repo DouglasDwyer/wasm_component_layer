@@ -1,6 +1,7 @@
 use crate::*;
 use crate::abi::*;
 use crate::values::Value;
+use crate::types::ValueType;
 use std::mem::*;
 use std::sync::*;
 use std::usize;
@@ -21,7 +22,7 @@ impl Func {
             results
         };
 
-        Generator::new(&self.0.component.resolve, AbiVariant::GuestExport, LiftLower::LowerArgsLiftResults, &mut bindgen).call(&self.0.function);
+        Generator::new(&self.0.component.resolve, AbiVariant::GuestExport, LiftLower::LowerArgsLiftResults, &mut bindgen).call(&self.0.function)?;
 
         if let Some(err) = bindgen.error {
             Err(err)
@@ -31,7 +32,7 @@ impl Func {
         }
     }
 
-    pub fn params(&self) -> Box<[crate::types::Type]> {
+    /*pub fn params(&self) -> Box<[crate::types::Type]> {
         self.0.component.types[self.0.component.types[self.0.ty].params]
             .types
             .iter()
@@ -45,7 +46,7 @@ impl Func {
             .iter()
             .map(|ty| crate::types::Type::from(ty, self.0.component.clone()))
             .collect()
-    }
+    }*/
 }
 
 macro_rules! require_matches {
@@ -79,12 +80,24 @@ struct FuncBindgen<'a, C: AsContextMut> {
 }
 
 impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
-    fn emit_inner(
+    fn load<B: Blittable>(&self, offset: usize) -> Result<B> {
+        Ok(B::from_bytes(<B::Array as ByteArray>::load(&self.ctx, self.func.memory.as_ref().expect("No memory."), offset)?))
+    }
+
+    fn store<B: Blittable>(&mut self, offset: usize, value: B) -> Result<()> {
+        value.to_bytes().store(&mut self.ctx, self.func.memory.as_ref().expect("No memory."), offset)
+    }
+}
+
+impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
+    type Operand = Value;
+
+    fn emit(
         &mut self,
         resolve: &Resolve,
         inst: &Instruction<'_>,
-        operands: &mut Vec<Value>,
-        results: &mut Vec<Value>
+        operands: &mut Vec<Self::Operand>,
+        results: &mut Vec<Self::Operand>,
     ) -> Result<()> {
         match inst {
             Instruction::GetArg { nth } => results.push(self.arguments.get(*nth).cloned().ok_or_else(|| Error::msg("Invalid argument count."))?),
@@ -152,10 +165,9 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
             Instruction::Float64FromF64 => require_matches!(operands.pop(), Some(Value::F64(x)), results.push(Value::F64(x))),
             Instruction::BoolFromI32 => require_matches!(operands.pop(), Some(Value::S32(x)), results.push(Value::Bool(if x > 0 { true } else { false }))),
             Instruction::I32FromBool => require_matches!(operands.pop(), Some(Value::Bool(x)), results.push(Value::S32(x as i32))),
-            Instruction::ListCanonLower { element, realloc } => unreachable!(),
             Instruction::StringLower { realloc } => {
                 let encoded = require_matches!(operands.pop(), Some(Value::String(x)), match self.func.encoding {
-                    StringEncoding::Utf8 => x.into_bytes(),
+                    StringEncoding::Utf8 => Vec::from_iter(x.bytes()),
                     StringEncoding::Utf16 | StringEncoding::CompactUtf16 => x.encode_utf16().flat_map(|a| a.to_le_bytes()).collect()
                 });
 
@@ -163,11 +175,36 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
                 let args = [wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(1), wasm_runtime_layer::Value::I32(encoded.len() as i32)];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
                 realloc.call(&mut self.ctx, &args, &mut res)?;
-                require_matches!(&res[0], wasm_runtime_layer::Value::I32(x), results.push(Value::S32(*x)));
+                let ptr = require_matches!(&res[0], wasm_runtime_layer::Value::I32(x), *x);
+
+                let memory = self.func.memory.as_ref().expect("No memory.");
+                memory.write(&mut self.ctx, ptr as usize, &encoded)?;
+
+                results.push(Value::S32(ptr));
                 results.push(Value::S32(encoded.len() as i32));
             },
-            Instruction::ListLower { element, realloc } => todo!(),
-            Instruction::ListCanonLift { element, ty } => unreachable!(),
+            Instruction::ListLower { element, realloc, len } => {
+                let list = require_matches!(operands.pop(), Some(Value::List(x)), x);
+                let align = self.func.component.size_align.align(element);
+                let size = self.func.component.size_align.size(element);
+
+                let realloc = self.func.realloc.as_ref().expect("No realloc.");
+                let args = [wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(align as i32), wasm_runtime_layer::Value::I32((list.len() * size) as i32)];
+                let mut res = [wasm_runtime_layer::Value::I32(0)];
+                realloc.call(&mut self.ctx, &args, &mut res)?;
+                let ptr = require_matches!(res[0], wasm_runtime_layer::Value::I32(x), x);
+
+                len.set(list.len() as i32);
+
+                results.push(Value::S32(ptr));
+                results.push(Value::S32(list.len() as i32));
+
+                for item in &list {
+                    results.push(item.clone());
+                }
+
+                results.push(Value::S32(ptr));
+            },
             Instruction::StringLift => {
                 let memory = self.func.memory.as_ref().expect("No memory.");
                 let mut len = require_matches!(operands.pop(), Some(Value::S32(len)), len) as usize;
@@ -175,33 +212,49 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
                 require_matches!(operands.pop(), Some(Value::S32(ptr)), memory.read(&self.ctx, ptr as usize, &mut result));
                 
                 match self.func.encoding {
-                    StringEncoding::Utf8 => results.push(Value::String(String::from_utf8(result)?)),
+                    StringEncoding::Utf8 => results.push(Value::String(String::from_utf8(result)?.into())),
                     StringEncoding::Utf16 | StringEncoding::CompactUtf16 => {
                         ensure!(result.len() & 0b1 == 0, "Invalid string length");
                         results.push(Value::String(String::from_utf16(&result.chunks_exact(2)
                             .map(|e| u16::from_be_bytes(e.try_into().expect("All chunks must have size 2.")))
-                            .collect::<Vec<_>>())?));
+                            .collect::<Vec<_>>())?.into()));
                     },
                 }
             },
-            Instruction::ListLift { element, ty } => {
-                let element_size = self.func.component.size_align.size(element);
-                let len = require_matches!(operands.pop(), Some(Value::S32(x)), x) as usize;
-                let base_ptr = require_matches!(operands.pop(), Some(Value::S32(x)), x) as usize;
-                results.reserve(len);
+            Instruction::ListLift { element, ty, len } => {
+                let ty = self.func.component.types[ty.index()].clone();
+                results.push(Value::List(List::new(require_matches!(ty, crate::types::ValueType::List(x), x), operands.drain(..))?));
+            },
+            Instruction::ReadI32 { value } => value.set(require_matches!(operands.pop(), Some(Value::S32(x)), x)),
+            Instruction::RecordLower { record, name, ty } => {
+                let official_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Record(x), x);
+                let record = require_matches!(operands.pop(), Some(Value::Record(x)), x);
+                ensure!(&record.ty() == official_ty, "Record types did not match.");
+                
+                for i in 0..record.fields().len() {
+                    results.push(Value::Bool(false));
+                }
 
-                for i in 0..len {
-                    results.push(todo!());
+                for (index, value) in official_ty.fields.iter().map(|x| x.0).zip(record.fields().map(|x| x.1)) {
+                    results[index] = value;
                 }
             },
-            Instruction::IterElem { element } => todo!(),
-            Instruction::IterBasePointer => todo!(),
-            Instruction::RecordLower { record, name, ty } => todo!(),
-            Instruction::RecordLift { record, name, ty } => todo!(),
-            Instruction::HandleLower { handle, name, ty } => todo!(),
-            Instruction::HandleLift { handle, name, ty } => todo!(),
-            Instruction::TupleLower { tuple, ty } => todo!(),
-            Instruction::TupleLift { tuple, ty } => todo!(),
+            Instruction::RecordLift { record, name, ty } => {
+                let official_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Record(x), x);
+                ensure!(operands.len() == official_ty.fields().len(), "Record types did not match.");
+
+                results.push(Value::Record(crate::values::Record::from_sorted(official_ty.clone(), official_ty.fields.iter().map(|(i, name, _)| (name.clone(), replace(&mut operands[*i], Value::Bool(false)))))));
+                operands.clear();
+            },
+            Instruction::HandleLower { handle, name, ty } => bail!("Not yet implemented."),
+            Instruction::HandleLift { handle, name, ty } => bail!("Not yet implemented."),
+            Instruction::TupleLower { tuple, ty } => {
+                let tuple = require_matches!(operands.pop(), Some(Value::Tuple(x)), x);
+                results.extend(tuple.iter().cloned());
+            },
+            Instruction::TupleLift { tuple, ty } => {
+                results.push(Value::Tuple(crate::values::Tuple::new_unchecked(require_matches!(&self.func.component.types[ty.index()], ValueType::Tuple(x), x.clone()), operands.drain(..))));
+            },
             Instruction::FlagsLower { flags, name, ty } => todo!(),
             Instruction::FlagsLift { flags, name, ty } => todo!(),
             Instruction::VariantPayloadName => todo!(),
@@ -247,60 +300,8 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
         Ok(())
     }
 
-    fn load<B: Blittable>(&self, offset: usize) -> Result<B> {
-        Ok(B::from_bytes(<B::Array as ByteArray>::load(&self.ctx, self.func.memory.as_ref().expect("No memory."), offset)?))
-    }
-
-    fn store<B: Blittable>(&mut self, offset: usize, value: B) -> Result<()> {
-        value.to_bytes().store(&mut self.ctx, self.func.memory.as_ref().expect("No memory."), offset)
-    }
-}
-
-impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
-    type Operand = Value;
-
-    fn emit(
-        &mut self,
-        resolve: &Resolve,
-        inst: &Instruction<'_>,
-        operands: &mut Vec<Self::Operand>,
-        results: &mut Vec<Self::Operand>,
-    ) {
-        if self.error.is_some() {
-            for i in 0..inst.results_len() {
-                results.push(Value::S32(0));
-            }
-            return;
-        }
-
-        self.error = self.emit_inner(resolve, inst, operands, results).err();
-
-        if self.error.is_some() {
-            results.clear();
-            for i in 0..inst.results_len() {
-                results.push(Value::S32(0));
-            }
-        }
-    }
-
-    fn return_pointer(&mut self, size: usize, align: usize) -> Self::Operand {
-        unreachable!()
-    }
-
-    fn push_block(&mut self) {
-        todo!()
-    }
-
-    fn finish_block(&mut self, operand: &mut Vec<Self::Operand>) {
-        todo!()
-    }
-
     fn sizes(&self) -> &SizeAlign {
         &self.func.component.size_align
-    }
-
-    fn is_list_canonical(&self, resolve: &Resolve, element: &Type) -> bool {
-        false
     }
 }
 

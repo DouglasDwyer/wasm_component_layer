@@ -1,3 +1,7 @@
+#![forbid(unused_results)]
+
+use anyhow::*;
+use std::cell::*;
 use wit_parser::*;
 
 pub use wit_parser::abi::{AbiVariant, WasmSignature, WasmType};
@@ -225,40 +229,7 @@ def_instruction! {
         /// Creates an `i32` from a `bool` input, must return 0 or 1.
         I32FromBool : [1] => [1],
 
-        // lists
-
-        /// Lowers a list where the element's layout in the native language is
-        /// expected to match the canonical ABI definition of interface types.
-        ///
-        /// Pops a list value from the stack and pushes the pointer/length onto
-        /// the stack. If `realloc` is set to `Some` then this is expected to
-        /// *consume* the list which means that the data needs to be copied. An
-        /// allocation/copy is expected when:
-        ///
-        /// * A host is calling a wasm export with a list (it needs to copy the
-        ///   list in to the callee's module, allocating space with `realloc`)
-        /// * A wasm export is returning a list (it's expected to use `realloc`
-        ///   to give ownership of the list to the caller.
-        /// * A host is returning a list in a import definition, meaning that
-        ///   space needs to be allocated in the caller with `realloc`).
-        ///
-        /// A copy does not happen (e.g. `realloc` is `None`) when:
-        ///
-        /// * A wasm module calls an import with the list. In this situation
-        ///   it's expected the caller will know how to access this module's
-        ///   memory (e.g. the host has raw access or wasm-to-wasm communication
-        ///   would copy the list).
-        ///
-        /// If `realloc` is `Some` then the adapter is not responsible for
-        /// cleaning up this list because the other end is receiving the
-        /// allocation. If `realloc` is `None` then the adapter is responsible
-        /// for cleaning up any temporary allocation it created, if any.
-        ListCanonLower {
-            element: &'a Type,
-            realloc: Option<&'a str>,
-        } : [1] => [2],
-
-        /// Same as `ListCanonLower`, but used for strings
+        /// Pops a string from the stack, lowers it into guest memory, and pushes a pointer and length onto the stack.
         StringLower {
             realloc: Option<&'a str>,
         } : [1] => [2],
@@ -267,60 +238,37 @@ def_instruction! {
         /// not expected to match the canonical ABI definition of interface
         /// types.
         ///
-        /// Pops a list value from the stack and pushes the pointer/length onto
-        /// the stack. This operation also pops a block from the block stack
-        /// which is used as the iteration body of writing each element of the
-        /// list consumed.
+        /// Pops a list value from the stack, and pushes the following in order:
+        /// 
+        /// - The pointer to the list
+        /// - The length of the list
+        /// - ...the values in the list
+        /// - The length again
         ///
-        /// The `realloc` field here behaves the same way as `ListCanonLower`.
-        /// It's only set to `None` when a wasm module calls a declared import.
+        /// The `realloc` field here is only set to `None` when a wasm module calls a declared import.
         /// Otherwise lowering in other contexts requires allocating memory for
         /// the receiver to own.
         ListLower {
             element: &'a Type,
             realloc: Option<&'a str>,
-        } : [1] => [2],
+            len: Cell<i32>
+        } : [1] => [(len.get() as usize) + 3],
 
-        /// Lifts a list which has a canonical representation into an interface
-        /// types value.
-        ///
-        /// The term "canonical" representation here means that the
-        /// representation of the interface types value in the native language
-        /// exactly matches the canonical ABI definition of the type.
-        ///
-        /// This will consume two `i32` values from the stack, a pointer and a
-        /// length, and then produces an interface value list.
-        ListCanonLift {
-            element: &'a Type,
-            ty: TypeId,
-        } : [2] => [1],
-
-        /// Same as `ListCanonLift`, but used for strings
+        /// Pops a length and pointer off of the stack, and lifts a string.
         StringLift : [2] => [1],
 
         /// Lifts a list which into an interface types value.
         ///
-        /// This will consume two `i32` values from the stack, a pointer and a
-        /// length, and then produces an interface value list.
-        ///
-        /// This will also pop a block from the block stack which is how to
-        /// read each individual element from the list.
+        /// This will consume `len` operands of type `element` from the stack,
+        /// concatenating them into a single list.
         ListLift {
             element: &'a Type,
             ty: TypeId,
-        } : [2] => [1],
+            len: i32
+        } : [*len as usize] => [1],
 
-        /// Pushes an operand onto the stack representing the list item from
-        /// each iteration of the list.
-        ///
-        /// This is only used inside of blocks related to lowering lists.
-        IterElem { element: &'a Type } : [0] => [1],
-
-        /// Pushes an operand onto the stack representing the base pointer of
-        /// the next element in a list.
-        ///
-        /// This is used for both lifting and lowering lists.
-        IterBasePointer : [0] => [1],
+        /// Converts a 32-bit integer from a stack value, and stores it in the instruction.
+        ReadI32 { value: Cell<i32> } : [1] => [0],
 
         // records and tuples
 
@@ -592,7 +540,7 @@ pub trait Bindgen {
     /// The intermediate type for fragments of code for this type.
     ///
     /// For most languages `String` is a suitable intermediate type.
-    type Operand: Clone;
+    type Operand: Clone + std::fmt::Debug;
 
     /// Emit code to implement the given instruction.
     ///
@@ -608,46 +556,10 @@ pub trait Bindgen {
         inst: &Instruction<'_>,
         operands: &mut Vec<Self::Operand>,
         results: &mut Vec<Self::Operand>,
-    );
-
-    /// Gets a operand reference to the return pointer area.
-    ///
-    /// The provided size and alignment is for the function's return type.
-    fn return_pointer(&mut self, size: usize, align: usize) -> Self::Operand;
-
-    /// Enters a new block of code to generate code for.
-    ///
-    /// This is currently exclusively used for constructing variants. When a
-    /// variant is constructed a block here will be pushed for each case of a
-    /// variant, generating the code necessary to translate a variant case.
-    ///
-    /// Blocks are completed with `finish_block` below. It's expected that `emit`
-    /// will always push code (if necessary) into the "current block", which is
-    /// updated by calling this method and `finish_block` below.
-    fn push_block(&mut self);
-
-    /// Indicates to the code generator that a block is completed, and the
-    /// `operand` specified was the resulting value of the block.
-    ///
-    /// This method will be used to compute the value of each arm of lifting a
-    /// variant. The `operand` will be `None` if the variant case didn't
-    /// actually have any type associated with it. Otherwise it will be `Some`
-    /// as the last value remaining on the stack representing the value
-    /// associated with a variant's `case`.
-    ///
-    /// It's expected that this will resume code generation in the previous
-    /// block before `push_block` was called. This must also save the results
-    /// of the current block internally for instructions like `ResultLift` to
-    /// use later.
-    fn finish_block(&mut self, operand: &mut Vec<Self::Operand>);
+    ) -> Result<()>;
 
     /// Returns size information that was previously calculated for all types.
     fn sizes(&self) -> &SizeAlign;
-
-    /// Returns whether or not the specified element type is represented in a
-    /// "canonical" form for lists. This dictates whether the `ListCanonLower`
-    /// and `ListCanonLift` instructions are used or not.
-    fn is_list_canonical(&self, resolve: &Resolve, element: &Type) -> bool;
 }
 
 pub struct Generator<'a, B: Bindgen> {
@@ -680,7 +592,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
-    pub fn call(&mut self, func: &Function) {
+    pub fn call(&mut self, func: &Function) -> Result<()> {
         let sig = self.resolve.wasm_signature(self.variant, func);
 
         match self.lift_lower {
@@ -690,8 +602,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     // (there aren't too many) then we simply do a normal lower
                     // operation for them all.
                     for (nth, (_, ty)) in func.params.iter().enumerate() {
-                        self.emit(&Instruction::GetArg { nth });
-                        self.lower(ty);
+                        self.emit(&Instruction::GetArg { nth })?;
+                        self.lower(ty)?;
                     }
                 } else {
                     // ... otherwise if parameters are indirect space is
@@ -704,7 +616,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     let ptr = match self.variant {
                         // When a wasm module calls an import it will provide
                         // space that isn't explicitly deallocated.
-                        AbiVariant::GuestImport => self.bindgen.return_pointer(size, align),
+                        AbiVariant::GuestImport => unimplemented!(),
                         // When calling a wasm module from the outside, though,
                         // malloc needs to be called.
                         AbiVariant::GuestExport => {
@@ -712,27 +624,18 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                                 realloc: "cabi_realloc",
                                 size,
                                 align,
-                            });
+                            })?;
                             self.stack.pop().unwrap()
                         }
                     };
                     let mut offset = 0usize;
                     for (nth, (_, ty)) in func.params.iter().enumerate() {
-                        self.emit(&Instruction::GetArg { nth });
+                        self.emit(&Instruction::GetArg { nth })?;
                         offset = align_to(offset, self.bindgen.sizes().align(ty));
-                        self.write_to_memory(ty, ptr.clone(), offset as i32);
+                        self.write_to_memory(ty, ptr.clone(), offset as i32)?;
                         offset += self.bindgen.sizes().size(ty);
                     }
 
-                    self.stack.push(ptr);
-                }
-
-                // If necessary we may need to prepare a return pointer for
-                // this ABI.
-                if self.variant == AbiVariant::GuestImport && sig.retptr {
-                    let (size, align) = self.bindgen.sizes().params(func.results.iter_types());
-                    let ptr = self.bindgen.return_pointer(size, align);
-                    self.return_pointer = Some(ptr.clone());
                     self.stack.push(ptr);
                 }
 
@@ -742,14 +645,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 self.emit(&Instruction::CallWasm {
                     name: &func.name,
                     sig: &sig,
-                });
+                })?;
 
                 if !sig.retptr {
                     // With no return pointer in use we can simply lift the
                     // result(s) of the function from the result of the core
                     // wasm function.
                     for ty in func.results.iter_types() {
-                        self.lift(ty)
+                        self.lift(ty)?
                     }
                 } else {
                     let ptr = match self.variant {
@@ -759,8 +662,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         // `self.return_pointer`) so we use that to read
                         // the result of the function from memory.
                         AbiVariant::GuestImport => {
-                            assert!(sig.results.len() == 0);
-                            self.return_pointer.take().unwrap()
+                            unimplemented!()
                         }
 
                         // guest exports means that this is a host
@@ -775,7 +677,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 self.emit(&Instruction::Return {
                     func,
                     amt: func.results.len(),
-                });
+                })?;
             }
             LiftLower::LiftArgsLowerResults => {
                 if !sig.indirect_params {
@@ -788,7 +690,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         temp.truncate(0);
                         push_wasm(self.resolve, self.variant, ty, &mut temp);
                         for _ in 0..temp.len() {
-                            self.emit(&Instruction::GetArg { nth: offset });
+                            self.emit(&Instruction::GetArg { nth: offset })?;
                             offset += 1;
                         }
                         self.lift(ty);
@@ -798,7 +700,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     // where the pointer to the arguments is the first argument
                     // to the function.
                     let mut offset = 0usize;
-                    self.emit(&Instruction::GetArg { nth: 0 });
+                    self.emit(&Instruction::GetArg { nth: 0 })?;
                     let ptr = self.stack.pop().unwrap();
                     for (_, ty) in func.params.iter() {
                         offset = align_to(offset, self.bindgen.sizes().align(ty));
@@ -808,7 +710,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 }
 
                 // ... and that allows us to call the interface types function
-                self.emit(&Instruction::CallInterface { func });
+                self.emit(&Instruction::CallInterface { func })?;
 
                 // This was dynamically allocated by the caller so after
                 // it's been read by the guest we need to deallocate it.
@@ -818,8 +720,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                             .bindgen
                             .sizes()
                             .record(func.params.iter().map(|t| &t.1));
-                        self.emit(&Instruction::GetArg { nth: 0 });
-                        self.emit(&Instruction::GuestDeallocate { size, align });
+                        self.emit(&Instruction::GetArg { nth: 0 })?;
+                        self.emit(&Instruction::GuestDeallocate { size, align })?;
                     }
                 }
 
@@ -845,7 +747,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         AbiVariant::GuestImport => {
                             self.emit(&Instruction::GetArg {
                                 nth: sig.params.len() - 1,
-                            });
+                            })?;
                             let ptr = self.stack.pop().unwrap();
                             self.write_params_to_memory(func.results.iter_types(), ptr, 0);
                         }
@@ -856,11 +758,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         // (statically) and then write the result into that
                         // memory, returning the pointer at the end.
                         AbiVariant::GuestExport => {
-                            let (size, align) =
-                                self.bindgen.sizes().params(func.results.iter_types());
-                            let ptr = self.bindgen.return_pointer(size, align);
-                            self.write_params_to_memory(func.results.iter_types(), ptr.clone(), 0);
-                            self.stack.push(ptr);
+                            unimplemented!()
                         }
                     }
                 }
@@ -868,7 +766,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 self.emit(&Instruction::Return {
                     func,
                     amt: sig.results.len(),
-                });
+                })?;
             }
         }
 
@@ -877,9 +775,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             "stack has {} items remaining",
             self.stack.len()
         );
+
+        Ok(())
     }
 
-    fn emit(&mut self, inst: &Instruction<'_>) {
+    fn emit(&mut self, inst: &Instruction<'_>) -> Result<()> {
         self.operands.clear();
         self.results.clear();
 
@@ -894,7 +794,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.results.reserve(inst.results_len());
 
         self.bindgen
-            .emit(self.resolve, inst, &mut self.operands, &mut self.results);
+            .emit(self.resolve, inst, &mut self.operands, &mut self.results)?;
 
         assert_eq!(
             self.results.len(),
@@ -905,24 +805,19 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             self.results.len()
         );
         self.stack.append(&mut self.results);
+        
+        Ok(())
     }
 
     fn push_block(&mut self) {
-        self.bindgen.push_block();
+        unimplemented!()
     }
 
     fn finish_block(&mut self, size: usize) {
-        self.operands.clear();
-        assert!(
-            size <= self.stack.len(),
-            "not enough operands on stack for finishing block",
-        );
-        self.operands
-            .extend(self.stack.drain((self.stack.len() - size)..));
-        self.bindgen.finish_block(&mut self.operands);
+        unimplemented!()
     }
 
-    fn lower(&mut self, ty: &Type) {
+    fn lower(&mut self, ty: &Type) -> Result<()> {
         use Instruction::*;
 
         match *ty {
@@ -940,23 +835,24 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::Float64 => self.emit(&F64FromFloat64),
             Type::String => {
                 let realloc = self.list_realloc();
-                self.emit(&StringLower { realloc });
+                self.emit(&StringLower { realloc })
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Type(t) => self.lower(t),
                 TypeDefKind::List(element) => {
                     let realloc = self.list_realloc();
-                    if self.bindgen.is_list_canonical(self.resolve, element) {
-                        self.emit(&ListCanonLower { element, realloc });
-                    } else {
-                        self.push_block();
-                        self.emit(&IterElem { element });
-                        self.emit(&IterBasePointer);
-                        let addr = self.stack.pop().unwrap();
-                        self.write_to_memory(element, addr, 0);
-                        self.finish_block(0);
-                        self.emit(&ListLower { element, realloc });
+                    let lower = ListLower { element, realloc, len: Cell::default() };
+                    self.emit(&lower)?;
+
+                    let stride = self.bindgen.sizes().size(element) as i32;
+                    let len = if let ListLower { len, .. } = lower { len.get() } else { unreachable!() };
+
+                    let addr = self.stack.pop().unwrap();
+
+                    for i in (0..len).rev() {
+                        self.write_to_memory(element, addr.clone(), i * stride)?;
                     }
+                    Ok(())
                 }
                 TypeDefKind::Handle(handle) => {
                     let (Handle::Own(ty) | Handle::Borrow(ty)) = handle;
@@ -964,7 +860,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         handle,
                         ty: id,
                         name: self.resolve.types[*ty].name.as_deref().unwrap(),
-                    });
+                    })
                 }
                 TypeDefKind::Resource => {
                     todo!();
@@ -974,7 +870,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         record,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })?;
                     let values = self
                         .stack
                         .drain(self.stack.len() - record.fields.len()..)
@@ -983,9 +879,10 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.stack.push(value);
                         self.lower(&field.ty);
                     }
+                    Ok(())
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    self.emit(&TupleLower { tuple, ty: id });
+                    self.emit(&TupleLower { tuple, ty: id })?;
                     let values = self
                         .stack
                         .drain(self.stack.len() - tuple.types.len()..)
@@ -994,6 +891,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.stack.push(value);
                         self.lower(ty);
                     }
+                    Ok(())
                 }
 
                 TypeDefKind::Flags(flags) => {
@@ -1001,51 +899,51 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         flags,
                         ty: id,
                         name: self.resolve.types[id].name.as_ref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Variant(v) => {
                     let results =
-                        self.lower_variant_arms(ty, v.cases.iter().map(|c| c.ty.as_ref()));
+                        self.lower_variant_arms(ty, v.cases.iter().map(|c| c.ty.as_ref()))?;
                     self.emit(&VariantLower {
                         variant: v,
                         ty: id,
                         results: &results,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
                 TypeDefKind::Enum(enum_) => {
                     self.emit(&EnumLower {
                         enum_,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
                 TypeDefKind::Option(t) => {
-                    let results = self.lower_variant_arms(ty, [None, Some(t)]);
+                    let results = self.lower_variant_arms(ty, [None, Some(t)])?;
                     self.emit(&OptionLower {
                         payload: t,
                         ty: id,
                         results: &results,
-                    });
+                    })
                 }
                 TypeDefKind::Result(r) => {
-                    let results = self.lower_variant_arms(ty, [r.ok.as_ref(), r.err.as_ref()]);
+                    let results = self.lower_variant_arms(ty, [r.ok.as_ref(), r.err.as_ref()])?;
                     self.emit(&ResultLower {
                         result: r,
                         ty: id,
                         results: &results,
-                    });
+                    })
                 }
                 TypeDefKind::Union(union) => {
                     let results =
-                        self.lower_variant_arms(ty, union.cases.iter().map(|c| Some(&c.ty)));
+                        self.lower_variant_arms(ty, union.cases.iter().map(|c| Some(&c.ty)))?;
                     self.emit(&UnionLower {
                         union,
                         ty: id,
                         results: &results,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
                 TypeDefKind::Future(_) => todo!("lower future"),
                 TypeDefKind::Stream(_) => todo!("lower stream"),
@@ -1058,7 +956,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         &mut self,
         ty: &Type,
         cases: impl IntoIterator<Item = Option<&'b Type>>,
-    ) -> Vec<WasmType> {
+    ) -> Result<Vec<WasmType>> {
         use Instruction::*;
         let mut results = Vec::new();
         let mut temp = Vec::new();
@@ -1066,9 +964,9 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         push_wasm(self.resolve, self.variant, ty, &mut results);
         for (i, ty) in cases.into_iter().enumerate() {
             self.push_block();
-            self.emit(&VariantPayloadName);
+            self.emit(&VariantPayloadName)?;
             let payload_name = self.stack.pop().unwrap();
-            self.emit(&I32Const { val: i as i32 });
+            self.emit(&I32Const { val: i as i32 })?;
             let mut pushed = 1;
             if let Some(ty) = ty {
                 // Using the payload of this block we lower the type to
@@ -1092,7 +990,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     casts.push(cast(*actual, *expected));
                 }
                 if casts.iter().any(|c| *c != Bitcast::None) {
-                    self.emit(&Bitcasts { casts: &casts });
+                    self.emit(&Bitcasts { casts: &casts })?;
                 }
             }
 
@@ -1102,11 +1000,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             if pushed < results.len() {
                 self.emit(&ConstZero {
                     tys: &results[pushed..],
-                });
+                })?;
             }
             self.finish_block(results.len());
         }
-        results
+        Ok(results)
     }
 
     fn list_realloc(&self) -> Option<&'static str> {
@@ -1121,7 +1019,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
     /// Note that in general everything in this function is the opposite of the
     /// `lower` function above. This is intentional and should be kept this way!
-    fn lift(&mut self, ty: &Type) {
+    fn lift(&mut self, ty: &Type) -> Result<()> {
         use Instruction::*;
 
         match *ty {
@@ -1141,16 +1039,22 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Type(t) => self.lift(t),
                 TypeDefKind::List(element) => {
-                    if self.bindgen.is_list_canonical(self.resolve, element) {
-                        self.emit(&ListCanonLift { element, ty: id });
-                    } else {
-                        self.push_block();
-                        self.emit(&IterBasePointer);
-                        let addr = self.stack.pop().unwrap();
-                        self.read_from_memory(element, addr, 0);
-                        self.finish_block(1);
-                        self.emit(&ListLift { element, ty: id });
+                    let len = ReadI32 { value: Cell::default() };
+                    self.emit(&len)?;
+
+                    let len = match len {
+                        ReadI32 { value } => value.get(),
+                        _ => unreachable!()
+                    };
+
+                    let addr = self.stack.pop().unwrap();
+                    let stride = self.bindgen.sizes().size(element) as i32;
+
+                    for i in 0..len {
+                        self.read_from_memory(element, addr.clone(), stride * i)?;
                     }
+
+                    self.emit(&ListLift { element, ty: id, len })
                 }
                 TypeDefKind::Handle(handle) => {
                     let (Handle::Own(ty) | Handle::Borrow(ty)) = handle;
@@ -1158,7 +1062,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         handle,
                         ty: id,
                         name: self.resolve.types[*ty].name.as_deref().unwrap(),
-                    });
+                    })
                 }
                 TypeDefKind::Resource => {
                     todo!();
@@ -1180,7 +1084,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         record,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
                 TypeDefKind::Tuple(tuple) => {
                     let mut temp = Vec::new();
@@ -1195,14 +1099,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.stack.extend(args.drain(..temp.len()));
                         self.lift(ty);
                     }
-                    self.emit(&TupleLift { tuple, ty: id });
+                    self.emit(&TupleLift { tuple, ty: id })
                 }
                 TypeDefKind::Flags(flags) => {
                     self.emit(&FlagsLift {
                         flags,
                         ty: id,
                         name: self.resolve.types[id].name.as_ref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Variant(v) => {
@@ -1211,7 +1115,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         variant: v,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Enum(enum_) => {
@@ -1219,17 +1123,17 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         enum_,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Option(t) => {
                     self.lift_variant_arms(ty, [None, Some(t)]);
-                    self.emit(&OptionLift { payload: t, ty: id });
+                    self.emit(&OptionLift { payload: t, ty: id })
                 }
 
                 TypeDefKind::Result(r) => {
                     self.lift_variant_arms(ty, [r.ok.as_ref(), r.err.as_ref()]);
-                    self.emit(&ResultLift { result: r, ty: id });
+                    self.emit(&ResultLift { result: r, ty: id })
                 }
 
                 TypeDefKind::Union(union) => {
@@ -1238,7 +1142,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         union,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Future(_) => todo!("lift future"),
@@ -1252,7 +1156,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         &mut self,
         ty: &Type,
         cases: impl IntoIterator<Item = Option<&'b Type>>,
-    ) {
+    ) -> Result<()> {
         let mut params = Vec::new();
         let mut temp = Vec::new();
         let mut casts = Vec::new();
@@ -1278,17 +1182,18 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     casts.push(cast(*expected, *actual));
                 }
                 if casts.iter().any(|c| *c != Bitcast::None) {
-                    self.emit(&Instruction::Bitcasts { casts: &casts });
+                    self.emit(&Instruction::Bitcasts { casts: &casts })?;
                 }
 
                 // Then recursively lift this variant's payload.
-                self.lift(ty);
+                self.lift(ty)?;
             }
             self.finish_block(ty.is_some() as usize);
         }
+        Ok(())
     }
 
-    fn write_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) {
+    fn write_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         use Instruction::*;
 
         match *ty {
@@ -1319,37 +1224,39 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         record,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
-                    self.write_fields_to_memory(record.fields.iter().map(|f| &f.ty), addr, offset);
+                    })?;
+                    self.write_fields_to_memory(record.fields.iter().map(|f| &f.ty), addr, offset)
                 }
                 TypeDefKind::Resource => {
                     todo!()
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    self.emit(&TupleLower { tuple, ty: id });
-                    self.write_fields_to_memory(tuple.types.iter(), addr, offset);
+                    self.emit(&TupleLower { tuple, ty: id })?;
+                    self.write_fields_to_memory(tuple.types.iter(), addr, offset)
                 }
 
                 TypeDefKind::Flags(f) => {
-                    self.lower(ty);
+                    self.lower(ty)?;
                     match f.repr() {
                         FlagsRepr::U8 => {
                             self.stack.push(addr);
-                            self.store_intrepr(offset, Int::U8);
+                            self.store_intrepr(offset, Int::U8)?;
                         }
                         FlagsRepr::U16 => {
                             self.stack.push(addr);
-                            self.store_intrepr(offset, Int::U16);
+                            self.store_intrepr(offset, Int::U16)?;
                         }
                         FlagsRepr::U32(n) => {
                             for i in (0..n).rev() {
                                 self.stack.push(addr.clone());
                                 self.emit(&I32Store {
                                     offset: offset + (i as i32) * 4,
-                                });
+                                })?;
                             }
                         }
                     }
+
+                    Ok(())
                 }
 
                 // Each case will get its own block, and the first item in each
@@ -1362,22 +1269,22 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         addr,
                         v.tag(),
                         v.cases.iter().map(|c| c.ty.as_ref()),
-                    );
+                    )?;
                     self.emit(&VariantLower {
                         variant: v,
                         ty: id,
                         results: &[],
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Option(t) => {
-                    self.write_variant_arms_to_memory(offset, addr, Int::U8, [None, Some(t)]);
+                    self.write_variant_arms_to_memory(offset, addr, Int::U8, [None, Some(t)])?;
                     self.emit(&OptionLower {
                         payload: t,
                         ty: id,
                         results: &[],
-                    });
+                    })
                 }
 
                 TypeDefKind::Result(r) => {
@@ -1386,18 +1293,18 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         addr,
                         Int::U8,
                         [r.ok.as_ref(), r.err.as_ref()],
-                    );
+                    )?;
                     self.emit(&ResultLower {
                         result: r,
                         ty: id,
                         results: &[],
-                    });
+                    })
                 }
 
                 TypeDefKind::Enum(e) => {
-                    self.lower(ty);
+                    self.lower(ty)?;
                     self.stack.push(addr);
-                    self.store_intrepr(offset, e.tag());
+                    self.store_intrepr(offset, e.tag())
                 }
 
                 TypeDefKind::Union(union) => {
@@ -1406,13 +1313,13 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         addr,
                         union.tag(),
                         union.cases.iter().map(|c| Some(&c.ty)),
-                    );
+                    )?;
                     self.emit(&UnionLower {
                         union,
                         ty: id,
                         results: &[],
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Future(_) => todo!("write future to memory"),
@@ -1427,8 +1334,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         params: impl IntoIterator<Item = &'b Type> + ExactSizeIterator,
         addr: B::Operand,
         offset: i32,
-    ) {
-        self.write_fields_to_memory(params, addr, offset);
+    ) -> Result<()> {
+        self.write_fields_to_memory(params, addr, offset)
     }
 
     fn write_variant_arms_to_memory<'b>(
@@ -1437,33 +1344,34 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         addr: B::Operand,
         tag: Int,
         cases: impl IntoIterator<Item = Option<&'b Type>> + Clone,
-    ) {
+    ) -> Result<()> {
         let payload_offset =
             offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
         for (i, ty) in cases.into_iter().enumerate() {
             self.push_block();
             self.emit(&Instruction::VariantPayloadName);
             let payload_name = self.stack.pop().unwrap();
-            self.emit(&Instruction::I32Const { val: i as i32 });
+            self.emit(&Instruction::I32Const { val: i as i32 })?;
             self.stack.push(addr.clone());
-            self.store_intrepr(offset, tag);
+            self.store_intrepr(offset, tag)?;
             if let Some(ty) = ty {
                 self.stack.push(payload_name.clone());
-                self.write_to_memory(ty, addr.clone(), payload_offset);
+                self.write_to_memory(ty, addr.clone(), payload_offset)?;
             }
             self.finish_block(0);
         }
+        Ok(())
     }
 
-    fn write_list_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) {
+    fn write_list_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         // After lowering the list there's two i32 values on the stack
         // which we write into memory, writing the pointer into the low address
         // and the length into the high address.
         self.lower(ty);
         self.stack.push(addr.clone());
-        self.emit(&Instruction::I32Store { offset: offset + 4 });
+        self.emit(&Instruction::I32Store { offset: offset + 4 })?;
         self.stack.push(addr);
-        self.emit(&Instruction::I32Store { offset });
+        self.emit(&Instruction::I32Store { offset })
     }
 
     fn write_fields_to_memory<'b>(
@@ -1471,7 +1379,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         tys: impl IntoIterator<Item = &'b Type> + ExactSizeIterator,
         addr: B::Operand,
         offset: i32,
-    ) {
+    ) -> Result<()> {
         let fields = self
             .stack
             .drain(self.stack.len() - tys.len()..)
@@ -1484,17 +1392,18 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             .zip(fields)
         {
             self.stack.push(op);
-            self.write_to_memory(ty, addr.clone(), offset + (field_offset as i32));
+            self.write_to_memory(ty, addr.clone(), offset + (field_offset as i32))?;
         }
+        Ok(())
     }
 
-    fn lower_and_emit(&mut self, ty: &Type, addr: B::Operand, instr: &Instruction) {
-        self.lower(ty);
+    fn lower_and_emit(&mut self, ty: &Type, addr: B::Operand, instr: &Instruction) -> Result<()> {
+        self.lower(ty)?;
         self.stack.push(addr);
-        self.emit(instr);
+        self.emit(instr)
     }
 
-    fn read_from_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) {
+    fn read_from_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         use Instruction::*;
 
         match *ty {
@@ -1524,39 +1433,39 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 // as we go along, then aggregate all the fields into the
                 // record.
                 TypeDefKind::Record(record) => {
-                    self.read_fields_from_memory(record.fields.iter().map(|f| &f.ty), addr, offset);
+                    self.read_fields_from_memory(record.fields.iter().map(|f| &f.ty), addr, offset)?;
                     self.emit(&RecordLift {
                         record,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Tuple(tuple) => {
-                    self.read_fields_from_memory(&tuple.types, addr, offset);
-                    self.emit(&TupleLift { tuple, ty: id });
+                    self.read_fields_from_memory(&tuple.types, addr, offset)?;
+                    self.emit(&TupleLift { tuple, ty: id })
                 }
 
                 TypeDefKind::Flags(f) => {
                     match f.repr() {
                         FlagsRepr::U8 => {
                             self.stack.push(addr);
-                            self.load_intrepr(offset, Int::U8);
+                            self.load_intrepr(offset, Int::U8)?;
                         }
                         FlagsRepr::U16 => {
                             self.stack.push(addr);
-                            self.load_intrepr(offset, Int::U16);
+                            self.load_intrepr(offset, Int::U16)?;
                         }
                         FlagsRepr::U32(n) => {
                             for i in 0..n {
                                 self.stack.push(addr.clone());
                                 self.emit(&I32Load {
                                     offset: offset + (i as i32) * 4,
-                                });
+                                })?;
                             }
                         }
                     }
-                    self.lift(ty);
+                    self.lift(ty)
                 }
 
                 // Each case will get its own block, and we'll dispatch to the
@@ -1569,17 +1478,17 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         addr,
                         variant.tag(),
                         variant.cases.iter().map(|c| c.ty.as_ref()),
-                    );
+                    )?;
                     self.emit(&VariantLift {
                         variant,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Option(t) => {
-                    self.read_variant_arms_from_memory(offset, addr, Int::U8, [None, Some(t)]);
-                    self.emit(&OptionLift { payload: t, ty: id });
+                    self.read_variant_arms_from_memory(offset, addr, Int::U8, [None, Some(t)])?;
+                    self.emit(&OptionLift { payload: t, ty: id })
                 }
 
                 TypeDefKind::Result(r) => {
@@ -1588,14 +1497,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         addr,
                         Int::U8,
                         [r.ok.as_ref(), r.err.as_ref()],
-                    );
-                    self.emit(&ResultLift { result: r, ty: id });
+                    )?;
+                    self.emit(&ResultLift { result: r, ty: id })
                 }
 
                 TypeDefKind::Enum(e) => {
                     self.stack.push(addr.clone());
-                    self.load_intrepr(offset, e.tag());
-                    self.lift(ty);
+                    self.load_intrepr(offset, e.tag())?;
+                    self.lift(ty)
                 }
 
                 TypeDefKind::Union(union) => {
@@ -1604,12 +1513,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         addr,
                         union.tag(),
                         union.cases.iter().map(|c| Some(&c.ty)),
-                    );
+                    )?;
                     self.emit(&UnionLift {
                         union,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                    });
+                    })
                 }
 
                 TypeDefKind::Future(_) => todo!("read future from memory"),
@@ -1619,7 +1528,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
-    fn read_results_from_memory(&mut self, results: &Results, addr: B::Operand, offset: i32) {
+    fn read_results_from_memory(&mut self, results: &Results, addr: B::Operand, offset: i32) -> Result<()> {
         self.read_fields_from_memory(results.iter_types(), addr, offset)
     }
 
@@ -1629,28 +1538,29 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         addr: B::Operand,
         tag: Int,
         cases: impl IntoIterator<Item = Option<&'b Type>> + Clone,
-    ) {
+    ) -> Result<()> {
         self.stack.push(addr.clone());
-        self.load_intrepr(offset, tag);
+        self.load_intrepr(offset, tag)?;
         let payload_offset =
             offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
         for ty in cases {
             self.push_block();
             if let Some(ty) = ty {
-                self.read_from_memory(ty, addr.clone(), payload_offset);
+                self.read_from_memory(ty, addr.clone(), payload_offset)?;
             }
             self.finish_block(ty.is_some() as usize);
         }
+        Ok(())
     }
 
-    fn read_list_from_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) {
+    fn read_list_from_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         // Read the pointer/len and then perform the standard lifting
         // proceses.
         self.stack.push(addr.clone());
-        self.emit(&Instruction::I32Load { offset });
+        self.emit(&Instruction::I32Load { offset })?;
         self.stack.push(addr);
-        self.emit(&Instruction::I32Load { offset: offset + 4 });
-        self.lift(ty);
+        self.emit(&Instruction::I32Load { offset: offset + 4 })?;
+        self.lift(ty)
     }
 
     fn read_fields_from_memory<'b>(
@@ -1658,34 +1568,35 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         tys: impl IntoIterator<Item = &'b Type>,
         addr: B::Operand,
         offset: i32,
-    ) {
+    ) -> Result<()> {
         for (field_offset, ty) in self.bindgen.sizes().field_offsets(tys).iter() {
-            self.read_from_memory(ty, addr.clone(), offset + (*field_offset as i32));
+            self.read_from_memory(ty, addr.clone(), offset + (*field_offset as i32))?;
         }
+        Ok(())
     }
 
-    fn emit_and_lift(&mut self, ty: &Type, addr: B::Operand, instr: &Instruction) {
+    fn emit_and_lift(&mut self, ty: &Type, addr: B::Operand, instr: &Instruction) -> Result<()> {
         self.stack.push(addr);
-        self.emit(instr);
-        self.lift(ty);
+        self.emit(instr)?;
+        self.lift(ty)
     }
 
-    fn load_intrepr(&mut self, offset: i32, repr: Int) {
+    fn load_intrepr(&mut self, offset: i32, repr: Int) -> Result<()> {
         self.emit(&match repr {
             Int::U64 => Instruction::I64Load { offset },
             Int::U32 => Instruction::I32Load { offset },
             Int::U16 => Instruction::I32Load16U { offset },
             Int::U8 => Instruction::I32Load8U { offset },
-        });
+        })
     }
 
-    fn store_intrepr(&mut self, offset: i32, repr: Int) {
+    fn store_intrepr(&mut self, offset: i32, repr: Int) -> Result<()> {
         self.emit(&match repr {
             Int::U64 => Instruction::I64Store { offset },
             Int::U32 => Instruction::I32Store { offset },
             Int::U16 => Instruction::I32Store16 { offset },
             Int::U8 => Instruction::I32Store8 { offset },
-        });
+        })
     }
 }
 

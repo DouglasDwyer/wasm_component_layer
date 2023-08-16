@@ -27,7 +27,7 @@ pub struct Component(Arc<ComponentInner>);
 impl Component {
     pub fn new<E: backend::WasmEngine>(engine: &Engine<E>, bytes: &[u8]) -> Result<Self> {
         let inner = Self::generate_component(engine, bytes)?;
-        Ok(Self(Arc::new(Self::extract_initializers(inner)?)))
+        Ok(Self(Arc::new(Self::extract_initializers(Self::generate_types(inner)?)?)))
     }
 
     fn generate_component<E: backend::WasmEngine>(engine: &Engine<E>, bytes: &[u8]) -> Result<ComponentInner> {
@@ -40,7 +40,7 @@ impl Component {
         };
 
         let adapter_vec = wasmtime_environ::ScopeVec::new();
-        let (translation, types, module_data) = Self::translate_modules(bytes, &adapter_vec)?;
+        let (translation, module_data) = Self::translate_modules(bytes, &adapter_vec)?;
 
         let export_mapping = Self::generate_export_mapping(&module_data);
         let mut modules = FxHashMap::with_capacity_and_hasher(module_data.len(), Default::default());
@@ -62,7 +62,7 @@ impl Component {
             resolve,
             size_align,
             translation,
-            types,
+            types: Vec::default(),
             world_id
         })
     }
@@ -79,6 +79,14 @@ impl Component {
 
         export_mapping
     }
+
+    fn generate_types(mut inner: ComponentInner) -> Result<ComponentInner> {
+        for (id, val) in &inner.resolve.types {
+            assert!(inner.types.len() == id.index(), "Type definition IDs were not equal.");
+            inner.types.push(crate::types::ValueType::from_typedef(val, &inner.resolve)?);
+        }
+        Ok(inner)
+    } 
 
     fn extract_initializers(mut inner: ComponentInner) -> Result<ComponentInner> {
         for initializer in &inner.translation.component.initializers {
@@ -112,7 +120,7 @@ impl Component {
         Ok(inner)
     }
 
-    fn translate_modules<'a>(bytes: &'a [u8], scope: &'a wasmtime_environ::ScopeVec<u8>) -> Result<(ComponentTranslation, ComponentTypes, wasmtime_environ::PrimaryMap<StaticModuleIndex, wasmtime_environ::ModuleTranslation<'a>>)> {
+    fn translate_modules<'a>(bytes: &'a [u8], scope: &'a wasmtime_environ::ScopeVec<u8>) -> Result<(ComponentTranslation, wasmtime_environ::PrimaryMap<StaticModuleIndex, wasmtime_environ::ModuleTranslation<'a>>)> {
         let tunables = wasmtime_environ::Tunables::default();
         let mut types = ComponentTypesBuilder::default();
         let mut validator = Self::create_component_validator();
@@ -121,7 +129,7 @@ impl Component {
             .translate(bytes)
             .context("Could not translate input component to core WASM.")?;
 
-        Ok((translation, types.finish(), modules))
+        Ok((translation, modules))
     }
 
     fn create_component_validator() -> wasmtime_environ::wasmparser::Validator {
@@ -160,7 +168,7 @@ struct ComponentInner {
     pub resolve: Resolve,
     pub size_align: SizeAlign,
     pub translation: ComponentTranslation,
-    pub types: ComponentTypes,
+    pub types: Vec<crate::types::ValueType>,
     pub world_id: Id<World>
 }
 
@@ -275,6 +283,7 @@ impl Instance {
                     inner.instances.push(instance);
                 },
                 GlobalInitializer::ExtractMemory(_) => {},
+                GlobalInitializer::ExtractRealloc(_) => {},
                 GlobalInitializer::ExtractPostReturn(_) => {},
                 _ => bail!("Not yet implemented {initializer:?}.")
             }
@@ -295,7 +304,7 @@ struct InstanceInner {
 mod tests {
     use super::*;
     
-    const WASM: &[u8] = include_bytes!("test_guest_component.wasm");
+    const WASM: &[u8] = include_bytes!("test_guest_compl_comp.wasm");
 
     #[test]
     fn run() {
@@ -306,13 +315,24 @@ mod tests {
 
         let test_simple = inst.0.funcs.get(&("test:guest/tester".to_owned(), "test-simple-a".to_owned())).unwrap();
         let mut res = [crate::values::Value::U32(0)];
-        test_simple.call(&mut store, &[crate::values::Value::U32(23)], &mut res).unwrap();
+        /*test_simple.call(&mut store, &[crate::values::Value::U32(23)], &mut res).unwrap();
         println!("omg we got {res:?}");
 
         let get_string = inst.0.funcs.get(&("test:guest/tester".to_owned(), "get-a-string".to_owned())).unwrap();
-        let mut res = [crate::values::Value::U32(0)];
         get_string.call(&mut store, &[], &mut res).unwrap();
 
         println!("omg it returned {res:?}");
+
+        let annoying = inst.0.funcs.get(&("test:guest/tester".to_owned(), "make-it-annoying".to_owned())).unwrap();
+        annoying.call(&mut store, &[], &mut res).unwrap();
+
+        println!("and it fails {res:?}");*/
+
+        let nth_select = inst.0.funcs.get(&("test:guest/tester".to_owned(), "select-nth".to_owned())).unwrap();
+        nth_select.call(&mut store, &[crate::values::Value::List(List::new(ListType::new(crate::types::ValueType::String),
+            [crate::values::Value::String("hey".into()), crate::values::Value::String("yay".into())]
+        ).unwrap()), crate::values::Value::U32(0)], &mut res).unwrap();
+
+        println!("and it gg {res:?}");
     }
 }
