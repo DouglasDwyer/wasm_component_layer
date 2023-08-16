@@ -374,9 +374,9 @@ pub struct Flags {
 
 impl Flags {
     pub fn new(ty: FlagsType) -> Self {
-        let names = ty.names().len();
+        let names = ty.names().len() as u32;
         Self {
-            flags: if names > usize::BITS as usize { FlagsList::Multiple(Arc::new(vec!(0; ((names - 1) / usize::BITS as usize) + 1))) } else { FlagsList::Single(0) },
+            flags: if names > usize::BITS { FlagsList::Multiple(Arc::new(vec!(0; (((names - 1) / u32::BITS) + 1) as usize))) } else { FlagsList::Single(0) },
             ty
         }
     }
@@ -386,12 +386,13 @@ impl Flags {
     }
 
     pub fn get_index(&self, index: usize) -> bool {
+        let index = index as u32;
         match &self.flags {
             FlagsList::Single(x) => if (*x >> index) == 1 { true } else { false }
             FlagsList::Multiple(x) => {
-                let arr_index = index / usize::BITS as usize;
-                let sub_index = index % usize::BITS as usize;
-                if (x[arr_index] >> sub_index) == 1 { true } else { false }
+                let arr_index = index / u32::BITS;
+                let sub_index = index % u32::BITS;
+                if (x[arr_index as usize] >> sub_index) == 1 { true } else { false }
             }
         }
     }
@@ -401,13 +402,14 @@ impl Flags {
     }
 
     pub fn set_index(&mut self, index: usize, value: bool) {
+        let index = index as u32;
         match &mut self.flags {
             FlagsList::Single(x) => if value { *x |= 1 << index; } else { *x &= !(1 << index); }
             FlagsList::Multiple(x) => {
                 let list = Arc::make_mut(x);
-                let arr_index = index / usize::BITS as usize;
-                let sub_index = index % usize::BITS as usize;
-                let x = &mut list[arr_index];
+                let arr_index = index / u32::BITS;
+                let sub_index = index % u32::BITS;
+                let x = &mut list[arr_index as usize];
                 if value { *x |= 1 << sub_index; } else { *x &= !(1 << sub_index); }
             }
         }
@@ -417,13 +419,24 @@ impl Flags {
         self.ty.clone()
     }
 
+    pub(crate) fn new_unchecked(ty: FlagsType, flags: FlagsList) -> Self {
+        Self { ty, flags }
+    }
+
+    pub(crate) fn as_u32_list(&self) -> &[u32] {
+        match &self.flags {
+            FlagsList::Single(x) => std::slice::from_ref(x),
+            FlagsList::Multiple(x) => &**x
+        }
+    }
+
     fn index_of(&self, name: impl AsRef<str>) -> usize {
         *self.ty.indices.get(name.as_ref()).expect("Unknown flag name")
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum FlagsList {
-    Single(usize),
-    Multiple(Arc<Vec<usize>>)
+pub(crate) enum FlagsList {
+    Single(u32),
+    Multiple(Arc<Vec<u32>>)
 }

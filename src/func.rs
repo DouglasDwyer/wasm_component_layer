@@ -70,6 +70,8 @@ pub(crate) struct FuncInner {
     pub ty: TypeFuncIndex,
 }
 
+//, F: Fn(StoreContextMut<'_, C::UserState, C::Engine>, &[Value], &mut [Value]) -> Result<()>
+
 struct FuncBindgen<'a, C: AsContextMut> {
     pub ctx: C,
     pub func: &'a FuncInner,
@@ -255,15 +257,37 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             Instruction::TupleLift { tuple, ty } => {
                 results.push(Value::Tuple(crate::values::Tuple::new_unchecked(require_matches!(&self.func.component.types[ty.index()], ValueType::Tuple(x), x.clone()), operands.drain(..))));
             },
-            Instruction::FlagsLower { flags, name, ty } => todo!(),
-            Instruction::FlagsLift { flags, name, ty } => todo!(),
+            Instruction::FlagsLower { flags, name, ty } => {
+                let flags = require_matches!(operands.pop(), Some(Value::Flags(x)), x);
+                if flags.ty().names().len() > 0 {
+                    results.extend(flags.as_u32_list().iter().map(|x| Value::S32(*x as i32)));
+                }
+            },
+            Instruction::FlagsLift { flags, name, ty } => {
+                let flags = require_matches!(&self.func.component.types[ty.index()], ValueType::Flags(x), x);
+
+                let list = match operands.len() {
+                    0 => FlagsList::Single(0),
+                    1 => FlagsList::Single(require_matches!(operands.pop(), Some(Value::S32(x)), x as u32)),
+                    _ => FlagsList::Multiple(Arc::new(operands.drain(..).map(|x| Ok(require_matches!(x, Value::S32(y), y) as u32)).collect::<Result<_>>()?))
+                };
+
+                results.push(Value::Flags(crate::values::Flags::new_unchecked(flags.clone(), list)));
+            },
             Instruction::VariantPayloadName => todo!(),
             Instruction::VariantLower { variant, name, ty, results } => todo!(),
             Instruction::VariantLift { variant, name, ty } => todo!(),
             Instruction::UnionLower { union, name, ty, results } => todo!(),
             Instruction::UnionLift { union, name, ty } => todo!(),
-            Instruction::EnumLower { enum_, name, ty } => todo!(),
-            Instruction::EnumLift { enum_, name, ty } => todo!(),
+            Instruction::EnumLower { enum_, name, ty } => {
+                let en = require_matches!(operands.pop(), Some(Value::Enum(x)), x);
+                results.push(Value::S32(en.discriminant() as i32));
+            },
+            Instruction::EnumLift { enum_, name, ty } => {
+                let enum_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Enum(x), x);
+                let discriminant = require_matches!(operands.pop(), Some(Value::S32(x)), x);
+                results.push(Value::Enum(crate::values::Enum::new(enum_ty.clone(), discriminant as usize)?));
+            },
             Instruction::OptionLower { payload, ty, results } => todo!(),
             Instruction::OptionLift { payload, ty } => todo!(),
             Instruction::ResultLower { result, ty, results } => todo!(),

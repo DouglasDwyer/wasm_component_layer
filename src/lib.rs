@@ -331,7 +331,7 @@ mod tests {
         let nth_select = inst.0.funcs.get(&("test:guest/tester".to_owned(), "select-nth".to_owned())).unwrap();
         nth_select.call(&mut store, &[crate::values::Value::List(List::new(ListType::new(crate::types::ValueType::String),
             [crate::values::Value::String("hey".into()), crate::values::Value::String("yay".into())]
-        ).unwrap()), crate::values::Value::U32(0)], &mut res).unwrap();
+        ).unwrap()), crate::values::Value::U32(1)], &mut res).unwrap();
 
         println!("and it gg {res:?}");
     }
