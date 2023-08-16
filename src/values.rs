@@ -540,10 +540,10 @@ pub enum Value {
     U32(u32),
     S64(i64),
     U64(u64),
-    Float32(f32),
-    Float64(f64),
+    F32(f32),
+    F64(f64),
     Char(char),
-    String(Box<str>),
+    String(String),
     List(List),
     Record(Record),
     Tuple(Tuple),
@@ -569,8 +569,8 @@ impl Value {
             Value::U32(_) => crate::types::Type::U32,
             Value::S64(_) => crate::types::Type::S64,
             Value::U64(_) => crate::types::Type::U64,
-            Value::Float32(_) => crate::types::Type::Float32,
-            Value::Float64(_) => crate::types::Type::Float64,
+            Value::F32(_) => crate::types::Type::Float32,
+            Value::F64(_) => crate::types::Type::Float64,
             Value::Char(_) => crate::types::Type::Char,
             Value::String(_) => crate::types::Type::String,
             Value::List(List { ty, .. }) => crate::types::Type::List(ty.clone()),
@@ -595,18 +595,18 @@ impl PartialEq for Value {
             // this logic is used by testing and fuzzing, which want to know
             // whether two values are semantically the same, rather than
             // numerically equal.
-            (Self::Float32(l), Self::Float32(r)) => {
+            (Self::F32(l), Self::F32(r)) => {
                 (*l != 0.0 && l == r)
                     || (*l == 0.0 && l.to_bits() == r.to_bits())
                     || (l.is_nan() && r.is_nan())
             }
-            (Self::Float32(_), _) => false,
-            (Self::Float64(l), Self::Float64(r)) => {
+            (Self::F32(_), _) => false,
+            (Self::F64(l), Self::F64(r)) => {
                 (*l != 0.0 && l == r)
                     || (*l == 0.0 && l.to_bits() == r.to_bits())
                     || (l.is_nan() && r.is_nan())
             }
-            (Self::Float64(_), _) => false,
+            (Self::F64(_), _) => false,
 
             (Self::Bool(l), Self::Bool(r)) => l == r,
             (Self::Bool(_), _) => false,
@@ -655,3 +655,31 @@ impl PartialEq for Value {
 }
 
 impl Eq for Value {}
+
+impl TryFrom<&Value> for wasm_runtime_layer::Value {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self> {
+        match value {
+            Value::S32(x) => Ok(Self::I32(*x)),
+            Value::S64(x) => Ok(Self::I64(*x)),
+            Value::F32(x) => Ok(Self::F32(*x)),
+            Value::F64(x) => Ok(Self::F64(*x)),
+            _ => bail!("Unable to convert {value:?} to core type.")
+        }
+    }
+}
+
+impl TryFrom<&wasm_runtime_layer::Value> for Value {
+    type Error = Error;
+
+    fn try_from(value: &wasm_runtime_layer::Value) -> Result<Self> {
+        match value {
+            wasm_runtime_layer::Value::I32(x) => Ok(Self::S32(*x)),
+            wasm_runtime_layer::Value::I64(x) => Ok(Self::S64(*x)),
+            wasm_runtime_layer::Value::F32(x) => Ok(Self::F32(*x)),
+            wasm_runtime_layer::Value::F64(x) => Ok(Self::F64(*x)),
+            _ => bail!("Unable to convert {value:?} to component type.")
+        }
+    }
+}

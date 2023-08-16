@@ -20,11 +20,11 @@ use wasmtime_environ::*;
 #[derive(Clone)]
 struct Handle<T> {
     index: T,
-    instance: Arc<crate::InstanceInner>
+    instance: Arc<crate::ComponentInner>
 }
 
 impl<T> Handle<T> {
-    fn new(index: T, instance: Arc<crate::InstanceInner>) -> Handle<T> {
+    fn new(index: T, instance: Arc<crate::ComponentInner>) -> Handle<T> {
         Handle {
             index,
             instance
@@ -61,13 +61,13 @@ impl List {
         Ok(Value::List(crate::values::List::new(self, values)?))
     }
 
-    pub(crate) fn from(index: TypeListIndex, instance: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeListIndex, instance: Arc<crate::ComponentInner>) -> Self {
         List(Handle::new(index, instance))
     }
 
     /// Retreive the element type of this `list`.
     pub fn ty(&self) -> Type {
-        Type::from(&self.0.instance.component.types[self.0.index].element, self.0.instance.clone())
+        Type::from(&self.0.instance.types[self.0.index].element, self.0.instance.clone())
     }
 }
 
@@ -89,13 +89,13 @@ impl Record {
         Ok(Value::Record(crate::values::Record::new(self, values)?))
     }
 
-    pub(crate) fn from(index: TypeRecordIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeRecordIndex, ty: Arc<crate::ComponentInner>) -> Self {
         Record(Handle::new(index, ty))
     }
 
     /// Retrieve the fields of this `record` in declaration order.
     pub fn fields(&self) -> impl ExactSizeIterator<Item = Field<'_>> {
-        self.0.instance.component.types[self.0.index].fields.iter().map(|field| Field {
+        self.0.instance.types[self.0.index].fields.iter().map(|field| Field {
             name: &field.name,
             ty: Type::from(&field.ty, self.0.instance.clone()),
         })
@@ -112,13 +112,13 @@ impl Tuple {
         Ok(Value::Tuple(crate::values::Tuple::new(self, values)?))
     }
 
-    pub(crate) fn from(index: TypeTupleIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeTupleIndex, ty: Arc<crate::ComponentInner>) -> Self {
         Tuple(Handle::new(index, ty))
     }
 
     /// Retrieve the types of the fields of this `tuple` in declaration order.
     pub fn types(&self) -> impl ExactSizeIterator<Item = Type> + '_ {
-        self.0.instance.component.types[self.0.index]
+        self.0.instance.types[self.0.index]
             .types
             .iter()
             .map(|ty| Type::from(ty, self.0.instance.clone()))
@@ -143,13 +143,13 @@ impl Variant {
         Ok(Value::Variant(crate::values::Variant::new(self, name, value)?))
     }
 
-    pub(crate) fn from(index: TypeVariantIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeVariantIndex, ty: Arc<crate::ComponentInner>) -> Self {
         Variant(Handle::new(index, ty))
     }
 
     /// Retrieve the cases of this `variant` in declaration order.
     pub fn cases(&self) -> impl ExactSizeIterator<Item = Case> {
-        self.0.instance.component.types[self.0.index].cases.iter().map(|case| Case {
+        self.0.instance.types[self.0.index].cases.iter().map(|case| Case {
             name: &case.name,
             ty: case
                 .ty
@@ -169,13 +169,13 @@ impl Enum {
         Ok(Value::Enum(crate::values::Enum::new(self, name)?))
     }
 
-    pub(crate) fn from(index: TypeEnumIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeEnumIndex, ty: Arc<crate::ComponentInner>) -> Self {
         Enum(Handle::new(index, ty))
     }
 
     /// Retrieve the names of the cases of this `enum` in declaration order.
     pub fn names(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.0.instance.component.types[self.0.index]
+        self.0.instance.types[self.0.index]
             .names
             .iter()
             .map(|name| name.deref())
@@ -192,13 +192,13 @@ impl Union {
         Ok(Value::Union(crate::values::Union::new(self, discriminant, value)?))
     }
 
-    pub(crate) fn from(index: TypeUnionIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeUnionIndex, ty: Arc<crate::ComponentInner>) -> Self {
         Union(Handle::new(index, ty))
     }
 
     /// Retrieve the types of the cases of this `union` in declaration order.
     pub fn types(&self) -> impl ExactSizeIterator<Item = Type> + '_ {
-        self.0.instance.component.types[self.0.index]
+        self.0.instance.types[self.0.index]
             .types
             .iter()
             .map(|ty| Type::from(ty, self.0.instance.clone()))
@@ -215,13 +215,13 @@ impl OptionType {
         Ok(Value::Option(crate::values::OptionVal::new(self, value)?))
     }
 
-    pub(crate) fn from(index: TypeOptionIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeOptionIndex, ty: Arc<crate::ComponentInner>) -> Self {
         OptionType(Handle::new(index, ty))
     }
 
     /// Retrieve the type parameter for this `option`.
     pub fn ty(&self) -> Type {
-        Type::from(&self.0.instance.component.types[self.0.index].ty, self.0.instance.clone())
+        Type::from(&self.0.instance.types[self.0.index].ty, self.0.instance.clone())
     }
 }
 
@@ -235,14 +235,14 @@ impl ResultType {
         Ok(Value::Result(crate::values::ResultVal::new(self, value)?))
     }
 
-    pub(crate) fn from(index: TypeResultIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeResultIndex, ty: Arc<crate::ComponentInner>) -> Self {
         ResultType(Handle::new(index, ty))
     }
 
     /// Retrieve the `ok` type parameter for this `option`.
     pub fn ok(&self) -> Option<Type> {
         Some(Type::from(
-            self.0.instance.component.types[self.0.index].ok.as_ref()?,
+            self.0.instance.types[self.0.index].ok.as_ref()?,
             self.0.instance.clone(),
         ))
     }
@@ -250,7 +250,7 @@ impl ResultType {
     /// Retrieve the `err` type parameter for this `option`.
     pub fn err(&self) -> Option<Type> {
         Some(Type::from(
-            self.0.instance.component.types[self.0.index].err.as_ref()?,
+            self.0.instance.types[self.0.index].err.as_ref()?,
             self.0.instance.clone(),
         ))
     }
@@ -266,20 +266,20 @@ impl Flags {
         Ok(Value::Flags(crate::values::Flags::new(self, names)?))
     }
 
-    pub(crate) fn from(index: TypeFlagsIndex, ty: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(index: TypeFlagsIndex, ty: Arc<crate::ComponentInner>) -> Self {
         Flags(Handle::new(index, ty))
     }
 
     /// Retrieve the names of the flags of this `flags` type in declaration order.
     pub fn names(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.0.instance.component.types[self.0.index]
+        self.0.instance.types[self.0.index]
             .names
             .iter()
             .map(|name| name.deref())
     }
 
     pub(crate) fn canonical_abi(&self) -> &CanonicalAbiInfo {
-        &self.0.instance.component.types[self.0.index].abi
+        &self.0.instance.types[self.0.index].abi
     }
 }
 
@@ -474,7 +474,7 @@ impl Type {
     }
 
     /// Convert the specified `InterfaceType` to a `Type`.
-    pub(crate) fn from(ty: &InterfaceType, instance: Arc<crate::InstanceInner>) -> Self {
+    pub(crate) fn from(ty: &InterfaceType, instance: Arc<crate::ComponentInner>) -> Self {
         match ty {
             InterfaceType::Bool => Type::Bool,
             InterfaceType::S8 => Type::S8,
