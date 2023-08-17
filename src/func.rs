@@ -280,7 +280,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     Value::Enum(x) => (x.discriminant(), None),
                     Value::Union(x) => (x.discriminant(), Some(x.value())),
                     Value::Option(x) => (x.is_some().then_some(1).unwrap_or_default(), (*x).clone()),
-                    Value::Result(x) => (x.is_err().then_some(1).unwrap_or_default(), match x { std::result::Result::Ok(y) => y, std::result::Result::Err(y) => y }),
+                    Value::Result(x) => (x.is_err().then_some(1).unwrap_or_default(), match &*x { std::result::Result::Ok(y) => y, std::result::Result::Err(y) => y }.clone()),
                     _ => bail!("Invalid type for which to extract variant.")
                 };
 
@@ -292,13 +292,10 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     discriminant_value.set((discriminant as i32, false));
                 }
             },
-            Instruction::VariantPayloadName => todo!(),
-            Instruction::VariantLower { variant, name, ty, results } => todo!(),
             Instruction::VariantLift { variant, name, ty, discriminant, .. } => {
                 let variant_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Variant(x), x);
                 results.push(Value::Variant(crate::values::Variant::new(variant_ty.clone(), *discriminant as usize, operands.pop())?));
             },
-            Instruction::UnionLower { union, name, ty, results } => todo!(),
             Instruction::UnionLift { union, name, ty, discriminant } => {
                 let union_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Union(x), x);
                 let value = require_matches!(operands.pop(), Some(x), x);
@@ -312,12 +309,10 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 let enum_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Enum(x), x);
                 results.push(Value::Enum(crate::values::Enum::new(enum_ty.clone(), *discriminant as usize)?));
             },
-            Instruction::OptionLower { payload, ty, results } => todo!(),
             Instruction::OptionLift { payload, ty, discriminant, .. } => {
                 let option_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Option(x), x);
                 results.push(Value::Option(OptionValue::new(option_ty.clone(), if *discriminant == 0 { None } else { Some(require_matches!(operands.pop(), Some(x), x)) })?));
             },
-            Instruction::ResultLower { result, ty, results } => todo!(),
             Instruction::ResultLift { result, discriminant, ty, .. } => {
                 let result_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Result(x), x);
                 results.push(Value::Result(ResultValue::new(result_ty.clone(), if *discriminant == 0 { std::result::Result::Ok(operands.pop()) } else { std::result::Result::Err(operands.pop()) })?));

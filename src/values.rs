@@ -349,7 +349,7 @@ impl ResultValue {
         ensure!(match &value {
             std::result::Result::Ok(x) => x.as_ref().map(|y| y.ty()) == ty.ok_ty(),
             std::result::Result::Err(x) => x.as_ref().map(|y| y.ty()) == ty.err_ty(),
-        }, "Provided result value was of incorrect type.");
+        }, "Provided result value was of incorrect type. (expected {ty:?}, had {value:?})");
         Ok(Self { ty, value: Arc::new(value) })
     }
 

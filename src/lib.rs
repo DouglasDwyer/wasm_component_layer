@@ -323,13 +323,14 @@ mod tests {
 
         println!("omg it returned {res:?}");*/
 
+        let list_ty = ListType::new(crate::types::ValueType::U32);
         let res_type = ResultType::new(Some(crate::types::ValueType::String),
-            Some(crate::types::ValueType::List(ListType::new(crate::types::ValueType::U32)))
+            Some(crate::types::ValueType::List(list_ty.clone()))
         );
 
         let annoying = inst.0.funcs.get(&("test:guest/tester".to_owned(), "make-it-annoying".to_owned())).unwrap();
         annoying.call(&mut store, &[
-            crate::values::Value::Result(ResultValue::new(res_type, std::result::Result::Ok(Some(crate::values::Value::String("henlo".into())))).unwrap())
+            crate::values::Value::Result(ResultValue::new(res_type, std::result::Result::Err(Some(crate::values::Value::List(crate::values::List::new(list_ty, [crate::values::Value::U32(29), crate::values::Value::U32(37)]).unwrap())))).unwrap())
         ], &mut res).unwrap();
 
         println!("and it fails {res:?}");

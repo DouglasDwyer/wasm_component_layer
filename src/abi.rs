@@ -336,24 +336,6 @@ def_instruction! {
         /// Pushes a value onto the stack if one exists.
         ExtractVariantDiscriminant { discriminant_value: Cell<(i32, bool)> } : [1] => [if discriminant_value.get().1 { 1 } else { 0 }],
 
-        /// This is a special instruction used for `VariantLower`
-        /// instruction to determine the name of the payload, if present, to use
-        /// within each block.
-        ///
-        /// Each sub-block will have this be the first instruction, and if it
-        /// lowers a payload it will expect something bound to this name.
-        VariantPayloadName : [0] => [1],
-
-        /// Pops a variant off the stack as well as `ty.cases.len()` blocks
-        /// from the code generator. Uses each of those blocks and the value
-        /// from the stack to produce `nresults` of items.
-        VariantLower {
-            variant: &'a Variant,
-            name: &'a str,
-            ty: TypeId,
-            results: &'a [WasmType],
-        } : [1] => [results.len()],
-
         /// Pops an `i32` off the stack as well as `ty.cases.len()` blocks
         /// from the code generator. Uses each of those blocks and the value
         /// from the stack to produce a final variant.
@@ -364,14 +346,6 @@ def_instruction! {
             discriminant: i32,
             has_value: bool,
         } : [if *has_value { 1 } else { 0 }] => [1],
-
-        /// Same as `VariantLower`, except used for unions.
-        UnionLower {
-            union: &'a Union,
-            name: &'a str,
-            ty: TypeId,
-            results: &'a [WasmType],
-        } : [1] => [results.len()],
 
         /// Same as `VariantLift`, except used for unions.
         UnionLift {
@@ -396,15 +370,6 @@ def_instruction! {
             discriminant: i32,
         } : [0] => [1],
 
-        /// Specialization of `VariantLower` for specifically `option<T>` types,
-        /// otherwise behaves the same as `VariantLower` (e.g. two blocks for
-        /// the two cases.
-        OptionLower {
-            payload: &'a Type,
-            ty: TypeId,
-            results: &'a [WasmType],
-        } : [1] => [results.len()],
-
         /// Specialization of `VariantLift` for specifically the `option<T>`
         /// type. Otherwise behaves the same as the `VariantLift` instruction
         /// with two blocks for the lift.
@@ -414,15 +379,6 @@ def_instruction! {
             discriminant: i32,
             has_value: bool,
         } : [if *has_value { 1 } else { 0 }] => [1],
-
-        /// Specialization of `VariantLower` for specifically `result<T, E>`
-        /// types, otherwise behaves the same as `VariantLower` (e.g. two blocks
-        /// for the two cases.
-        ResultLower {
-            result: &'a Result_
-            ty: TypeId,
-            results: &'a [WasmType],
-        } : [1] => [results.len()],
 
         /// Specialization of `VariantLift` for specifically the `result<T,
         /// E>` type. Otherwise behaves the same as the `VariantLift`
@@ -915,14 +871,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 }
 
                 TypeDefKind::Variant(v) => {
-                    let results =
-                        self.lower_variant_arms(ty, v.cases.iter().map(|c| c.ty.as_ref()))?;
-                    self.emit(&VariantLower {
-                        variant: v,
-                        ty: id,
-                        results: &results,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
-                    })
+                    self.lower_variant_arm(ty, v.cases.iter().map(|c| c.ty.as_ref()))
                 }
                 TypeDefKind::Enum(enum_) => {
                     self.emit(&EnumLower {
@@ -932,30 +881,13 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     })
                 }
                 TypeDefKind::Option(t) => {
-                    let results = self.lower_variant_arms(ty, [None, Some(t)])?;
-                    self.emit(&OptionLower {
-                        payload: t,
-                        ty: id,
-                        results: &results,
-                    })
+                    self.lower_variant_arm(ty, [None, Some(t)])
                 }
                 TypeDefKind::Result(r) => {
-                    let results = self.lower_variant_arms(ty, [r.ok.as_ref(), r.err.as_ref()])?;
-                    self.emit(&ResultLower {
-                        result: r,
-                        ty: id,
-                        results: &results,
-                    })
+                    self.lower_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])
                 }
                 TypeDefKind::Union(union) => {
-                    let results =
-                        self.lower_variant_arms(ty, union.cases.iter().map(|c| Some(&c.ty)))?;
-                    self.emit(&UnionLower {
-                        union,
-                        ty: id,
-                        results: &results,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
-                    })
+                    self.lower_variant_arm(ty, union.cases.iter().map(|c| Some(&c.ty)))
                 }
                 TypeDefKind::Future(_) => todo!("lower future"),
                 TypeDefKind::Stream(_) => todo!("lower stream"),
@@ -964,66 +896,61 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
-    fn lower_variant_arms<'b>(
+    fn lower_variant_arm<'b>(
         &mut self,
         ty: &Type,
         cases: impl IntoIterator<Item = Option<&'b Type>>,
-    ) -> Result<Vec<WasmType>> {
+    ) -> Result<()> {
         use Instruction::*;
+        let disc_val = ExtractVariantDiscriminant { discriminant_value: Cell::default() };
+        self.emit(&disc_val)?;
+
+        let discriminant = if let ExtractVariantDiscriminant { discriminant_value } = disc_val { discriminant_value.get().0 } else { unreachable!() };
+
         let mut results = Vec::new();
         let mut temp = Vec::new();
         let mut casts = Vec::new();
         push_wasm(self.resolve, self.variant, ty, &mut results);
-        for (i, ty) in cases.into_iter().enumerate() {
-            self.push_block();
-            self.emit(&VariantPayloadName)?;
-            let payload_name = self.stack.pop().unwrap();
-            self.emit(&I32Const { val: i as i32 })?;
-            let mut pushed = 1;
-            if let Some(ty) = ty {
-                // Using the payload of this block we lower the type to
-                // raw wasm values.
-                self.stack.push(payload_name);
-                self.lower(ty);
+        
+        let payload_name = self.stack.pop().unwrap();
+        self.emit(&I32Const { val: discriminant })?;
+        let mut pushed = 1;
+        if let Some(ty) = cases.into_iter().skip(discriminant as usize).next().ok_or_else(|| Error::msg("Invalid discriminator value."))? {
+            // Using the payload of this block we lower the type to
+            // raw wasm values.
+            self.stack.push(payload_name);
+            self.lower(ty);
 
-                // Determine the types of all the wasm values we just
-                // pushed, and record how many. If we pushed too few
-                // then we'll need to push some zeros after this.
-                temp.truncate(0);
-                push_wasm(self.resolve, self.variant, ty, &mut temp);
-                pushed += temp.len();
+            // Determine the types of all the wasm values we just
+            // pushed, and record how many. If we pushed too few
+            // then we'll need to push some zeros after this.
+            temp.truncate(0);
+            push_wasm(self.resolve, self.variant, ty, &mut temp);
+            pushed += temp.len();
 
-                // For all the types pushed we may need to insert some
-                // bitcasts. This will go through and cast everything
-                // to the right type to ensure all blocks produce the
-                // same set of results.
-                casts.truncate(0);
-                for (actual, expected) in temp.iter().zip(&results[1..]) {
-                    casts.push(cast(*actual, *expected));
-                }
-                if casts.iter().any(|c| *c != Bitcast::None) {
-                    self.emit(&Bitcasts { casts: &casts })?;
-                }
+            // For all the types pushed we may need to insert some
+            // bitcasts. This will go through and cast everything
+            // to the right type to ensure all blocks produce the
+            // same set of results.
+            casts.truncate(0);
+            for (actual, expected) in temp.iter().zip(&results[1..]) {
+                casts.push(cast(*actual, *expected));
             }
-
-            // If we haven't pushed enough items in this block to match
-            // what other variants are pushing then we need to push
-            // some zeros.
-            if pushed < results.len() {
-                self.emit(&ConstZero {
-                    tys: &results[pushed..],
-                })?;
+            if casts.iter().any(|c| *c != Bitcast::None) {
+                self.emit(&Bitcasts { casts: &casts })?;
             }
-            self.finish_block(results.len());
         }
-        Ok(results)
-    }
 
-    fn lower_variant_arms<'b>(
-        &mut self,
-        ty: &Type,
-        cases: impl IntoIterator<Item = Option<&'b Type>>,
-    ) -> Result<Vec<WasmType>> {
+        // If we haven't pushed enough items in this block to match
+        // what other variants are pushing then we need to push
+        // some zeros.
+        if pushed < results.len() {
+            self.emit(&ConstZero {
+                tys: &results[pushed..],
+            })?;
+        }
+
+        Ok(())
     }
 
     fn list_realloc(&self) -> Option<&'static str> {
@@ -1300,41 +1227,25 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 // payload we write the payload after the discriminant, aligned up
                 // to the type's alignment.
                 TypeDefKind::Variant(v) => {
-                    self.write_variant_arms_to_memory(
+                    self.write_variant_arm_to_memory(
                         offset,
                         addr,
                         v.tag(),
                         v.cases.iter().map(|c| c.ty.as_ref()),
-                    )?;
-                    self.emit(&VariantLower {
-                        variant: v,
-                        ty: id,
-                        results: &[],
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
-                    })
+                    )
                 }
 
                 TypeDefKind::Option(t) => {
-                    self.write_variant_arms_to_memory(offset, addr, Int::U8, [None, Some(t)])?;
-                    self.emit(&OptionLower {
-                        payload: t,
-                        ty: id,
-                        results: &[],
-                    })
+                    self.write_variant_arm_to_memory(offset, addr, Int::U8, [None, Some(t)])
                 }
 
                 TypeDefKind::Result(r) => {
-                    self.write_variant_arms_to_memory(
+                    self.write_variant_arm_to_memory(
                         offset,
                         addr,
                         Int::U8,
                         [r.ok.as_ref(), r.err.as_ref()],
-                    )?;
-                    self.emit(&ResultLower {
-                        result: r,
-                        ty: id,
-                        results: &[],
-                    })
+                    )
                 }
 
                 TypeDefKind::Enum(e) => {
@@ -1344,18 +1255,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 }
 
                 TypeDefKind::Union(union) => {
-                    self.write_variant_arms_to_memory(
+                    self.write_variant_arm_to_memory(
                         offset,
                         addr,
                         union.tag(),
                         union.cases.iter().map(|c| Some(&c.ty)),
-                    )?;
-                    self.emit(&UnionLower {
-                        union,
-                        ty: id,
-                        results: &[],
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
-                    })
+                    )
                 }
 
                 TypeDefKind::Future(_) => todo!("write future to memory"),
@@ -1374,28 +1279,30 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.write_fields_to_memory(params, addr, offset)
     }
 
-    fn write_variant_arms_to_memory<'b>(
+    fn write_variant_arm_to_memory<'b>(
         &mut self,
         offset: i32,
         addr: B::Operand,
         tag: Int,
         cases: impl IntoIterator<Item = Option<&'b Type>> + Clone,
     ) -> Result<()> {
+        let disc_val = Instruction::ExtractVariantDiscriminant { discriminant_value: Cell::default() };
+        self.emit(&disc_val)?;
+
+        let discriminant = if let Instruction::ExtractVariantDiscriminant { discriminant_value } = disc_val { discriminant_value.get().0 } else { unreachable!() };
+
         let payload_offset =
             offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
-        for (i, ty) in cases.into_iter().enumerate() {
-            self.push_block();
-            self.emit(&Instruction::VariantPayloadName);
-            let payload_name = self.stack.pop().unwrap();
-            self.emit(&Instruction::I32Const { val: i as i32 })?;
-            self.stack.push(addr.clone());
-            self.store_intrepr(offset, tag)?;
-            if let Some(ty) = ty {
-                self.stack.push(payload_name.clone());
-                self.write_to_memory(ty, addr.clone(), payload_offset)?;
-            }
-            self.finish_block(0);
+
+        let payload_name = self.stack.pop().unwrap();
+        self.emit(&Instruction::I32Const { val: discriminant })?;
+        self.stack.push(addr.clone());
+        self.store_intrepr(offset, tag)?;
+        if let Some(ty) = cases.into_iter().skip(discriminant as usize).next().ok_or_else(|| Error::msg("Invalid discriminator value."))? {
+            self.stack.push(payload_name.clone());
+            self.write_to_memory(ty, addr.clone(), payload_offset)?;
         }
+
         Ok(())
     }
 
