@@ -321,18 +321,24 @@ mod tests {
         let get_string = inst.0.funcs.get(&("test:guest/tester".to_owned(), "get-a-string".to_owned())).unwrap();
         get_string.call(&mut store, &[], &mut res).unwrap();
 
-        println!("omg it returned {res:?}");
+        println!("omg it returned {res:?}");*/
+
+        let res_type = ResultType::new(Some(crate::types::ValueType::String),
+            Some(crate::types::ValueType::List(ListType::new(crate::types::ValueType::U32)))
+        );
 
         let annoying = inst.0.funcs.get(&("test:guest/tester".to_owned(), "make-it-annoying".to_owned())).unwrap();
-        annoying.call(&mut store, &[], &mut res).unwrap();
+        annoying.call(&mut store, &[
+            crate::values::Value::Result(ResultValue::new(res_type, std::result::Result::Ok(Some(crate::values::Value::String("henlo".into())))).unwrap())
+        ], &mut res).unwrap();
 
-        println!("and it fails {res:?}");*/
+        println!("and it fails {res:?}");
 
-        let nth_select = inst.0.funcs.get(&("test:guest/tester".to_owned(), "select-nth".to_owned())).unwrap();
+        /*let nth_select = inst.0.funcs.get(&("test:guest/tester".to_owned(), "select-nth".to_owned())).unwrap();
         nth_select.call(&mut store, &[crate::values::Value::List(List::new(ListType::new(crate::types::ValueType::String),
             [crate::values::Value::String("hey".into()), crate::values::Value::String("yay".into())]
         ).unwrap()), crate::values::Value::U32(1)], &mut res).unwrap();
 
-        println!("and it gg {res:?}");
+        println!("and it gg {res:?}");*/
     }
 }

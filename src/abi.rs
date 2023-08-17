@@ -332,6 +332,10 @@ def_instruction! {
 
         // variants
 
+        /// Pops a variant value from the stack, and stores the discriminant in the instruction.
+        /// Pushes a value onto the stack if one exists.
+        ExtractVariantDiscriminant { discriminant_value: Cell<(i32, bool)> } : [1] => [if discriminant_value.get().1 { 1 } else { 0 }],
+
         /// This is a special instruction used for `VariantLower`
         /// instruction to determine the name of the payload, if present, to use
         /// within each block.
@@ -357,7 +361,9 @@ def_instruction! {
             variant: &'a Variant,
             name: &'a str,
             ty: TypeId,
-        } : [1] => [1],
+            discriminant: i32,
+            has_value: bool,
+        } : [if *has_value { 1 } else { 0 }] => [1],
 
         /// Same as `VariantLower`, except used for unions.
         UnionLower {
@@ -372,6 +378,7 @@ def_instruction! {
             union: &'a Union,
             name: &'a str,
             ty: TypeId,
+            discriminant: i32,
         } : [1] => [1],
 
         /// Pops an enum off the stack and pushes the `i32` representation.
@@ -381,12 +388,13 @@ def_instruction! {
             ty: TypeId,
         } : [1] => [1],
 
-        /// Pops an `i32` off the stack and lifts it into the `enum` specified.
+        /// Loads the specified discriminant into the `enum` specified.
         EnumLift {
             enum_: &'a Enum,
             name: &'a str,
             ty: TypeId,
-        } : [1] => [1],
+            discriminant: i32,
+        } : [0] => [1],
 
         /// Specialization of `VariantLower` for specifically `option<T>` types,
         /// otherwise behaves the same as `VariantLower` (e.g. two blocks for
@@ -403,7 +411,9 @@ def_instruction! {
         OptionLift {
             payload: &'a Type,
             ty: TypeId,
-        } : [1] => [1],
+            discriminant: i32,
+            has_value: bool,
+        } : [if *has_value { 1 } else { 0 }] => [1],
 
         /// Specialization of `VariantLower` for specifically `result<T, E>`
         /// types, otherwise behaves the same as `VariantLower` (e.g. two blocks
@@ -420,7 +430,9 @@ def_instruction! {
         ResultLift {
             result: &'a Result_,
             ty: TypeId,
-        } : [1] => [1],
+            discriminant: i32,
+            has_value: bool,
+        } : [if *has_value { 1 } else { 0 }] => [1],
 
         // calling/control flow
 
@@ -810,7 +822,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
     }
 
     fn push_block(&mut self) {
-        unimplemented!()
+        unimplemented!("Bruh {:?}", self.stack);
     }
 
     fn finish_block(&mut self, size: usize) {
@@ -1007,6 +1019,13 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(results)
     }
 
+    fn lower_variant_arms<'b>(
+        &mut self,
+        ty: &Type,
+        cases: impl IntoIterator<Item = Option<&'b Type>>,
+    ) -> Result<Vec<WasmType>> {
+    }
+
     fn list_realloc(&self) -> Option<&'static str> {
         // Lowering parameters calling a wasm import means
         // we don't need to pass ownership, but we pass
@@ -1110,38 +1129,49 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 }
 
                 TypeDefKind::Variant(v) => {
-                    self.lift_variant_arms(ty, v.cases.iter().map(|c| c.ty.as_ref()));
+                    let (discriminant, has_value) = self.lift_variant_arm(ty, v.cases.iter().map(|c| c.ty.as_ref()))?;
                     self.emit(&VariantLift {
                         variant: v,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
+                        discriminant,
+                        has_value
                     })
                 }
 
                 TypeDefKind::Enum(enum_) => {
-                    self.emit(&EnumLift {
-                        enum_,
-                        ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
-                    })
+                    let variant = ReadI32 { value: Cell::default() };
+                    self.emit(&variant)?;
+                    if let ReadI32 { value } = variant {
+                        self.emit(&EnumLift {
+                            enum_,
+                            ty: id,
+                            name: self.resolve.types[id].name.as_deref().unwrap(),
+                            discriminant: value.get()
+                        })
+                    }
+                    else {
+                        unreachable!()
+                    }
                 }
 
                 TypeDefKind::Option(t) => {
-                    self.lift_variant_arms(ty, [None, Some(t)]);
-                    self.emit(&OptionLift { payload: t, ty: id })
+                    let (discriminant, has_value) = self.lift_variant_arm(ty, [None, Some(t)])?;
+                    self.emit(&OptionLift { payload: t, ty: id, discriminant, has_value })
                 }
 
                 TypeDefKind::Result(r) => {
-                    self.lift_variant_arms(ty, [r.ok.as_ref(), r.err.as_ref()]);
-                    self.emit(&ResultLift { result: r, ty: id })
+                    let (discriminant, has_value) = self.lift_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])?;
+                    self.emit(&ResultLift { result: r, ty: id, discriminant, has_value })
                 }
 
                 TypeDefKind::Union(union) => {
-                    self.lift_variant_arms(ty, union.cases.iter().map(|c| Some(&c.ty)));
+                    let (discriminant, _) = self.lift_variant_arm(ty, union.cases.iter().map(|c| Some(&c.ty)))?;
                     self.emit(&UnionLift {
                         union,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
+                        discriminant
                     })
                 }
 
@@ -1152,22 +1182,21 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
-    fn lift_variant_arms<'b>(
-        &mut self,
-        ty: &Type,
-        cases: impl IntoIterator<Item = Option<&'b Type>>,
-    ) -> Result<()> {
-        let mut params = Vec::new();
-        let mut temp = Vec::new();
-        let mut casts = Vec::new();
-        push_wasm(self.resolve, self.variant, ty, &mut params);
-        let block_inputs = self
-            .stack
-            .drain(self.stack.len() + 1 - params.len()..)
-            .collect::<Vec<_>>();
-        for ty in cases {
-            self.push_block();
-            if let Some(ty) = ty {
+    fn lift_variant_arm<'b>(&mut self, ty: &Type, cases: impl IntoIterator<Item = Option<&'b Type>>) -> Result<(i32, bool)> {
+        let variant = Instruction::ReadI32 { value: Cell::default() };
+        self.emit(&variant)?;
+        if let Instruction::ReadI32 { value } = variant {
+            let discriminant = value.get();
+            let mut params = Vec::new();
+            let mut temp = Vec::new();
+            let mut casts = Vec::new();
+            push_wasm(self.resolve, self.variant, ty, &mut params);
+            let block_inputs = self
+                .stack
+                .drain(self.stack.len() + 1 - params.len()..)
+                .collect::<Vec<_>>();
+            
+            let has_value = if let Some(ty) = cases.into_iter().skip(discriminant as usize).next().ok_or_else(|| Error::msg("Invalid discriminant value."))? {
                 // Push only the values we need for this variant onto
                 // the stack.
                 temp.truncate(0);
@@ -1187,10 +1216,17 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
                 // Then recursively lift this variant's payload.
                 self.lift(ty)?;
+                true
             }
-            self.finish_block(ty.is_some() as usize);
+            else {
+                false
+            };
+
+            Ok((discriminant, has_value))
         }
-        Ok(())
+        else {
+            unreachable!()
+        }
     }
 
     fn write_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
@@ -1473,7 +1509,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 // individual block is pretty simple and just reads the payload type
                 // from the corresponding offset if one is available.
                 TypeDefKind::Variant(variant) => {
-                    self.read_variant_arms_from_memory(
+                    let (discriminant, has_value) = self.read_variant_arm_from_memory(
                         offset,
                         addr,
                         variant.tag(),
@@ -1483,22 +1519,24 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         variant,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
+                        discriminant,
+                        has_value
                     })
                 }
 
                 TypeDefKind::Option(t) => {
-                    self.read_variant_arms_from_memory(offset, addr, Int::U8, [None, Some(t)])?;
-                    self.emit(&OptionLift { payload: t, ty: id })
+                    let (discriminant, has_value) = self.read_variant_arm_from_memory(offset, addr, Int::U8, [None, Some(t)])?;
+                    self.emit(&OptionLift { payload: t, ty: id, discriminant, has_value })
                 }
 
                 TypeDefKind::Result(r) => {
-                    self.read_variant_arms_from_memory(
+                    let (discriminant, has_value) = self.read_variant_arm_from_memory(
                         offset,
                         addr,
                         Int::U8,
                         [r.ok.as_ref(), r.err.as_ref()],
                     )?;
-                    self.emit(&ResultLift { result: r, ty: id })
+                    self.emit(&ResultLift { result: r, discriminant, has_value, ty: id })
                 }
 
                 TypeDefKind::Enum(e) => {
@@ -1508,7 +1546,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 }
 
                 TypeDefKind::Union(union) => {
-                    self.read_variant_arms_from_memory(
+                    let (discriminant, _) = self.read_variant_arm_from_memory(
                         offset,
                         addr,
                         union.tag(),
@@ -1518,6 +1556,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         union,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
+                        discriminant
                     })
                 }
 
@@ -1551,6 +1590,31 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             self.finish_block(ty.is_some() as usize);
         }
         Ok(())
+    }
+
+    fn read_variant_arm_from_memory<'b>(&mut self, offset: i32, addr: B::Operand, tag: Int, cases: impl IntoIterator<Item = Option<&'b Type>> + Clone) -> Result<(i32, bool)> {
+        self.stack.push(addr.clone());
+        self.load_intrepr(offset, tag)?;
+        let variant = Instruction::ReadI32 { value: Cell::default() };
+        self.emit(&variant)?;
+        let payload_offset =
+            offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
+
+        if let Instruction::ReadI32 { value } = variant {
+            let disc = value.get();
+            let has_value = if let Some(ty) = cases.into_iter().skip(disc as usize).next().ok_or_else(|| Error::msg("Invalid discriminant value."))? {
+                self.read_from_memory(ty, addr.clone(), payload_offset)?;
+                true
+            }
+            else {
+                false
+            };
+    
+            Ok((disc, has_value))
+        }
+        else {
+            unreachable!()
+        }
     }
 
     fn read_list_from_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {

@@ -274,24 +274,54 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
 
                 results.push(Value::Flags(crate::values::Flags::new_unchecked(flags.clone(), list)));
             },
+            Instruction::ExtractVariantDiscriminant { discriminant_value } => {
+                let (discriminant, val) = match operands.pop().expect("No operand on stack for which to extract discriminant.") {
+                    Value::Variant(x) => (x.discriminant(), x.value()),
+                    Value::Enum(x) => (x.discriminant(), None),
+                    Value::Union(x) => (x.discriminant(), Some(x.value())),
+                    Value::Option(x) => (x.is_some().then_some(1).unwrap_or_default(), (*x).clone()),
+                    Value::Result(x) => (x.is_err().then_some(1).unwrap_or_default(), match x { std::result::Result::Ok(y) => y, std::result::Result::Err(y) => y }),
+                    _ => bail!("Invalid type for which to extract variant.")
+                };
+
+                if let Some(value) = val {
+                    results.push(value);
+                    discriminant_value.set((discriminant as i32, true));
+                }
+                else {
+                    discriminant_value.set((discriminant as i32, false));
+                }
+            },
             Instruction::VariantPayloadName => todo!(),
             Instruction::VariantLower { variant, name, ty, results } => todo!(),
-            Instruction::VariantLift { variant, name, ty } => todo!(),
+            Instruction::VariantLift { variant, name, ty, discriminant, .. } => {
+                let variant_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Variant(x), x);
+                results.push(Value::Variant(crate::values::Variant::new(variant_ty.clone(), *discriminant as usize, operands.pop())?));
+            },
             Instruction::UnionLower { union, name, ty, results } => todo!(),
-            Instruction::UnionLift { union, name, ty } => todo!(),
+            Instruction::UnionLift { union, name, ty, discriminant } => {
+                let union_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Union(x), x);
+                let value = require_matches!(operands.pop(), Some(x), x);
+                results.push(Value::Union(crate::values::Union::new(union_ty.clone(), *discriminant as usize, value)?));
+            },
             Instruction::EnumLower { enum_, name, ty } => {
                 let en = require_matches!(operands.pop(), Some(Value::Enum(x)), x);
                 results.push(Value::S32(en.discriminant() as i32));
             },
-            Instruction::EnumLift { enum_, name, ty } => {
+            Instruction::EnumLift { enum_, name, ty, discriminant } => {
                 let enum_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Enum(x), x);
-                let discriminant = require_matches!(operands.pop(), Some(Value::S32(x)), x);
-                results.push(Value::Enum(crate::values::Enum::new(enum_ty.clone(), discriminant as usize)?));
+                results.push(Value::Enum(crate::values::Enum::new(enum_ty.clone(), *discriminant as usize)?));
             },
             Instruction::OptionLower { payload, ty, results } => todo!(),
-            Instruction::OptionLift { payload, ty } => todo!(),
+            Instruction::OptionLift { payload, ty, discriminant, .. } => {
+                let option_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Option(x), x);
+                results.push(Value::Option(OptionValue::new(option_ty.clone(), if *discriminant == 0 { None } else { Some(require_matches!(operands.pop(), Some(x), x)) })?));
+            },
             Instruction::ResultLower { result, ty, results } => todo!(),
-            Instruction::ResultLift { result, ty } => todo!(),
+            Instruction::ResultLift { result, discriminant, ty, .. } => {
+                let result_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Result(x), x);
+                results.push(Value::Result(ResultValue::new(result_ty.clone(), if *discriminant == 0 { std::result::Result::Ok(operands.pop()) } else { std::result::Result::Err(operands.pop()) })?));
+            },
             Instruction::CallWasm { name, sig } => {
                 let args = operands.iter().map(TryFrom::try_from).collect::<Result<Vec<_>>>()?;
                 self.flat_results = vec!(wasm_runtime_layer::Value::I32(0); sig.results.len());
