@@ -311,3 +311,111 @@ impl Hash for FlagsType {
         self.names.hash(state)
     }
 }
+
+/// A function type representing a function's parameter and result types.
+///
+/// # Note
+///
+/// Can be cloned cheaply.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FuncType {
+    /// The number of function parameters.
+    len_params: usize,
+    /// The ordered and merged parameter and result types of the function type.
+    ///
+    /// # Note
+    ///
+    /// The parameters and results are ordered and merged in a single
+    /// vector starting with parameters in their order and followed
+    /// by results in their order.
+    /// The `len_params` field denotes how many parameters there are in
+    /// the head of the vector before the results.
+    params_results: Arc<[ValueType]>,
+}
+
+impl std::fmt::Debug for FuncType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("FuncType")
+            .field("params", &self.params())
+            .field("results", &self.results())
+            .finish()
+    }
+}
+
+impl FuncType {
+    pub(crate) fn from_resolve(func: &wit_parser::Function, resolve: &wit_parser::Resolve) -> Result<Self> {
+        let mut params_results = func.params.iter().map(|(_, ty)| ValueType::from_resolve(ty, resolve)).collect::<Result<Vec<_>>>()?;
+        let len_params = params_results.len();
+        
+        for result in func.results.iter_types().map(|ty| ValueType::from_resolve(ty, resolve)) {
+            params_results.push(result?);
+        }
+
+        Ok(Self {
+            params_results: params_results.into(),
+            len_params,
+        })
+    }
+
+    /// Creates a new [`FuncType`].
+    pub fn new<P, R>(params: P, results: R) -> Self
+    where
+        P: IntoIterator<Item = ValueType>,
+        R: IntoIterator<Item = ValueType>,
+    {
+        let mut params_results = params.into_iter().collect::<Vec<_>>();
+        let len_params = params_results.len();
+        params_results.extend(results);
+        Self {
+            params_results: params_results.into(),
+            len_params,
+        }
+    }
+
+    /// Returns the parameter types of the function type.
+    pub fn params(&self) -> &[ValueType] {
+        &self.params_results[..self.len_params]
+    }
+
+    /// Returns the result types of the function type.
+    pub fn results(&self) -> &[ValueType] {
+        &self.params_results[self.len_params..]
+    }
+
+    /// Returns the pair of parameter and result types of the function type.
+    pub(crate) fn params_results(&self) -> (&[ValueType], &[ValueType]) {
+        self.params_results.split_at(self.len_params)
+    }
+
+    /// Returns `Ok` if the number and types of items in `params` matches as expected by the [`FuncType`].
+    pub(crate) fn match_params(&self, params: &[crate::values::Value]) -> Result<()> {
+        if self.params().len() != params.len() {
+            bail!("Incorrect parameter length.");
+        }
+        if self
+            .params()
+            .iter()
+            .cloned()
+            .ne(params.iter().map(crate::values::Value::ty))
+        {
+            bail!("Incorrect parameter types.");
+        }
+        Ok(())
+    }
+
+    /// Returns `Ok` if the number and types of items in `results` matches as expected by the [`FuncType`].
+    pub(crate) fn match_results(&self, results: &[crate::values::Value]) -> Result<()> {
+        if self.params().len() != results.len() {
+            bail!("Incorrect parameter length.");
+        }
+        if self
+            .results()
+            .iter()
+            .cloned()
+            .ne(results.iter().map(crate::values::Value::ty))
+        {
+            bail!("Incorrect parameter types.");
+        }
+        Ok(())
+    }
+}

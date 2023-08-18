@@ -1,52 +1,133 @@
 use crate::*;
+use crate::{AsContext, AsContextMut, StoreContext, StoreContextMut};
 use crate::abi::*;
 use crate::values::Value;
-use crate::types::ValueType;
+use crate::types::{FuncType, ValueType};
+use std::any::*;
+use std::marker::*;
 use std::mem::*;
 use std::sync::*;
+use std::sync::atomic::*;
 use std::usize;
 use wasmtime_environ::component::*;
 use wasm_runtime_layer::*;
 
 #[derive(Clone, Debug)]
-pub struct Func(pub(crate) Arc<FuncInner>);
+pub(crate) enum FuncImpl {
+    GuestFunc(Arc<GuestFunc>),
+    HostFunc(Arc<AtomicUsize>)
+}
+
+#[derive(Debug)]
+pub(crate) struct GuestFunc {
+    pub callee: wasm_runtime_layer::Func,
+    pub component: Arc<ComponentInner>,
+    pub encoding: StringEncoding,
+    pub function: Function,
+    pub memory: Option<Memory>,
+    pub realloc: Option<wasm_runtime_layer::Func>,
+    pub post_return: Option<wasm_runtime_layer::Func>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Func {
+    pub(crate) store_id: u64,
+    pub(crate) ty: FuncType,
+    pub(crate) backing: FuncImpl
+}
 
 impl Func {
-    pub fn call(&self, ctx: impl AsContextMut, arguments: &[Value], results: &mut [Value]) -> Result<()> {
+    pub fn new<C: AsContextMut>(mut ctx: C, ty: FuncType, f: impl 'static + Send + Sync + Fn(StoreContextMut<C::UserState, C::Engine>, &[Value], &mut [Value]) -> Result<()>) -> Self {
+        let mut ctx_mut = ctx.as_context_mut();
+        let data = ctx_mut.inner.data_mut();
+        let idx = data.host_functions.push(f);
+
+        Self {
+            store_id: data.id,
+            ty,
+            backing: FuncImpl::HostFunc(idx)
+        }
+    }
+
+    pub fn call<C: AsContextMut>(&self, mut ctx: C, arguments: &[Value], results: &mut [Value]) -> Result<()> {
+        if ctx.as_context().inner.data().id != self.store_id {
+            panic!("Attempted to call function with incorrect store.");
+        }
+
+        self.ty.match_params(arguments);
+
+        if self.ty.results().len() != results.len() {
+            bail!("Incorrect result length.");
+        }
+
+        match &self.backing {
+            FuncImpl::GuestFunc(x) => {
+                let GuestFunc { callee, component, encoding, function, memory, realloc, post_return } = &**x;
+
+                let mut bindgen = FuncBindgen {
+                    ctx,
+                    flat_results: Vec::default(),
+                    arguments,
+                    results,
+                    callee_interface: None,
+                    callee_wasm: Some(callee),
+                    component: &**component,
+                    encoding,
+                    memory,
+                    realloc,
+                    post_return,
+                };
+        
+                Generator::new(&component.resolve, AbiVariant::GuestExport, LiftLower::LowerArgsLiftResults, &mut bindgen).call(function)
+            },
+            FuncImpl::HostFunc(idx) => {
+                let callee = ctx.as_context().inner.data().host_functions.get(&idx);
+                (callee)(ctx.as_context_mut(), arguments, results)?;
+                self.ty.match_results(results);
+                Ok(())
+            }
+        }
+    }
+    
+    pub fn ty(&self) -> FuncType {
+        self.ty.clone()
+    }
+
+    pub(crate) fn call_from_guest<C: AsContextMut>(&self, mut ctx: C, options: &GuestInvokeOptions, arguments: &[wasm_runtime_layer::Value], results: &mut [wasm_runtime_layer::Value]) -> Result<()> {
+        let args = arguments.iter().map(TryFrom::try_from).collect::<Result<Vec<_>>>()?;
+        let mut res = results.iter().map(TryFrom::try_from).collect::<Result<Vec<_>>>()?;
+        
         let mut bindgen = FuncBindgen {
             ctx,
-            func: &self.0,
-            error: None,
             flat_results: Vec::default(),
-            arguments,
-            results
+            arguments: &args,
+            results: &mut res,
+            callee_interface: Some(self),
+            callee_wasm: None,
+            component: &options.component,
+            encoding: &options.encoding,
+            memory: &options.memory,
+            realloc: &options.realloc,
+            post_return: &options.post_return,
         };
 
-        Generator::new(&self.0.component.resolve, AbiVariant::GuestExport, LiftLower::LowerArgsLiftResults, &mut bindgen).call(&self.0.function)?;
+        Generator::new(&options.component.resolve, AbiVariant::GuestImport, LiftLower::LiftArgsLowerResults, &mut bindgen).call(&options.function)?;
 
-        if let Some(err) = bindgen.error {
-            Err(err)
+        for (idx, val) in res.into_iter().enumerate() {
+            results[idx] = (&val).try_into()?;
         }
-        else {
-            Ok(())
-        }
-    }
 
-    /*pub fn params(&self) -> Box<[crate::types::Type]> {
-        self.0.component.types[self.0.component.types[self.0.ty].params]
-            .types
-            .iter()
-            .map(|ty| crate::types::Type::from(ty, self.0.component.clone()))
-            .collect()
+        Ok(())
     }
+}
 
-    pub fn results(&self) -> Box<[crate::types::Type]> {
-        self.0.component.types[self.0.component.types[self.0.ty].results]
-            .types
-            .iter()
-            .map(|ty| crate::types::Type::from(ty, self.0.component.clone()))
-            .collect()
-    }*/
+pub(crate) struct GuestInvokeOptions {
+    pub component: Arc<ComponentInner>,
+    pub encoding: StringEncoding,
+    pub function: Function,
+    pub memory: Option<Memory>,
+    pub realloc: Option<wasm_runtime_layer::Func>,
+    pub post_return: Option<wasm_runtime_layer::Func>
 }
 
 macro_rules! require_matches {
@@ -73,21 +154,26 @@ pub(crate) struct FuncInner {
 //, F: Fn(StoreContextMut<'_, C::UserState, C::Engine>, &[Value], &mut [Value]) -> Result<()>
 
 struct FuncBindgen<'a, C: AsContextMut> {
+    pub callee_interface: Option<&'a Func>,
+    pub callee_wasm: Option<&'a wasm_runtime_layer::Func>,
+    pub component: &'a ComponentInner,
     pub ctx: C,
-    pub func: &'a FuncInner,
-    pub error: Option<Error>,
+    pub encoding: &'a StringEncoding,
     pub flat_results: Vec<wasm_runtime_layer::Value>,
+    pub memory: &'a Option<Memory>,
+    pub realloc: &'a Option<wasm_runtime_layer::Func>,
+    pub post_return: &'a Option<wasm_runtime_layer::Func>,
     pub arguments: &'a [Value],
     pub results: &'a mut [Value]
 }
 
 impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
     fn load<B: Blittable>(&self, offset: usize) -> Result<B> {
-        Ok(B::from_bytes(<B::Array as ByteArray>::load(&self.ctx, self.func.memory.as_ref().expect("No memory."), offset)?))
+        Ok(B::from_bytes(<B::Array as ByteArray>::load(&self.ctx, self.memory.as_ref().expect("No memory."), offset)?))
     }
 
     fn store<B: Blittable>(&mut self, offset: usize, value: B) -> Result<()> {
-        value.to_bytes().store(&mut self.ctx, self.func.memory.as_ref().expect("No memory."), offset)
+        value.to_bytes().store(&mut self.ctx, self.memory.as_ref().expect("No memory."), offset)
     }
 }
 
@@ -168,32 +254,32 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             Instruction::BoolFromI32 => require_matches!(operands.pop(), Some(Value::S32(x)), results.push(Value::Bool(if x > 0 { true } else { false }))),
             Instruction::I32FromBool => require_matches!(operands.pop(), Some(Value::Bool(x)), results.push(Value::S32(x as i32))),
             Instruction::StringLower { realloc } => {
-                let encoded = require_matches!(operands.pop(), Some(Value::String(x)), match self.func.encoding {
+                let encoded = require_matches!(operands.pop(), Some(Value::String(x)), match self.encoding {
                     StringEncoding::Utf8 => Vec::from_iter(x.bytes()),
                     StringEncoding::Utf16 | StringEncoding::CompactUtf16 => x.encode_utf16().flat_map(|a| a.to_le_bytes()).collect()
                 });
 
-                let realloc = self.func.realloc.as_ref().expect("No realloc.");
+                let realloc = self.realloc.as_ref().expect("No realloc.");
                 let args = [wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(1), wasm_runtime_layer::Value::I32(encoded.len() as i32)];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
-                realloc.call(&mut self.ctx, &args, &mut res)?;
+                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
                 let ptr = require_matches!(&res[0], wasm_runtime_layer::Value::I32(x), *x);
 
-                let memory = self.func.memory.as_ref().expect("No memory.");
-                memory.write(&mut self.ctx, ptr as usize, &encoded)?;
+                let memory = self.memory.as_ref().expect("No memory.");
+                memory.write(&mut self.ctx.as_context_mut().inner, ptr as usize, &encoded)?;
 
                 results.push(Value::S32(ptr));
                 results.push(Value::S32(encoded.len() as i32));
             },
             Instruction::ListLower { element, realloc, len } => {
                 let list = require_matches!(operands.pop(), Some(Value::List(x)), x);
-                let align = self.func.component.size_align.align(element);
-                let size = self.func.component.size_align.size(element);
+                let align = self.component.size_align.align(element);
+                let size = self.component.size_align.size(element);
 
-                let realloc = self.func.realloc.as_ref().expect("No realloc.");
+                let realloc = self.realloc.as_ref().expect("No realloc.");
                 let args = [wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(align as i32), wasm_runtime_layer::Value::I32((list.len() * size) as i32)];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
-                realloc.call(&mut self.ctx, &args, &mut res)?;
+                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
                 let ptr = require_matches!(res[0], wasm_runtime_layer::Value::I32(x), x);
 
                 len.set(list.len() as i32);
@@ -208,12 +294,12 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 results.push(Value::S32(ptr));
             },
             Instruction::StringLift => {
-                let memory = self.func.memory.as_ref().expect("No memory.");
+                let memory = self.memory.as_ref().expect("No memory.");
                 let mut len = require_matches!(operands.pop(), Some(Value::S32(len)), len) as usize;
                 let mut result = vec!(0; len);
-                require_matches!(operands.pop(), Some(Value::S32(ptr)), memory.read(&self.ctx, ptr as usize, &mut result));
+                require_matches!(operands.pop(), Some(Value::S32(ptr)), memory.read(&self.ctx.as_context().inner, ptr as usize, &mut result));
                 
-                match self.func.encoding {
+                match self.encoding {
                     StringEncoding::Utf8 => results.push(Value::String(String::from_utf8(result)?.into())),
                     StringEncoding::Utf16 | StringEncoding::CompactUtf16 => {
                         ensure!(result.len() & 0b1 == 0, "Invalid string length");
@@ -224,12 +310,12 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::ListLift { element, ty, len } => {
-                let ty = self.func.component.types[ty.index()].clone();
+                let ty = self.component.types[ty.index()].clone();
                 results.push(Value::List(List::new(require_matches!(ty, crate::types::ValueType::List(x), x), operands.drain(..))?));
             },
             Instruction::ReadI32 { value } => value.set(require_matches!(operands.pop(), Some(Value::S32(x)), x)),
             Instruction::RecordLower { record, name, ty } => {
-                let official_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Record(x), x);
+                let official_ty = require_matches!(&self.component.types[ty.index()], ValueType::Record(x), x);
                 let record = require_matches!(operands.pop(), Some(Value::Record(x)), x);
                 ensure!(&record.ty() == official_ty, "Record types did not match.");
                 
@@ -242,7 +328,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::RecordLift { record, name, ty } => {
-                let official_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Record(x), x);
+                let official_ty = require_matches!(&self.component.types[ty.index()], ValueType::Record(x), x);
                 ensure!(operands.len() == official_ty.fields().len(), "Record types did not match.");
 
                 results.push(Value::Record(crate::values::Record::from_sorted(official_ty.clone(), official_ty.fields.iter().map(|(i, name, _)| (name.clone(), replace(&mut operands[*i], Value::Bool(false)))))));
@@ -255,7 +341,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 results.extend(tuple.iter().cloned());
             },
             Instruction::TupleLift { tuple, ty } => {
-                results.push(Value::Tuple(crate::values::Tuple::new_unchecked(require_matches!(&self.func.component.types[ty.index()], ValueType::Tuple(x), x.clone()), operands.drain(..))));
+                results.push(Value::Tuple(crate::values::Tuple::new_unchecked(require_matches!(&self.component.types[ty.index()], ValueType::Tuple(x), x.clone()), operands.drain(..))));
             },
             Instruction::FlagsLower { flags, name, ty } => {
                 let flags = require_matches!(operands.pop(), Some(Value::Flags(x)), x);
@@ -264,7 +350,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::FlagsLift { flags, name, ty } => {
-                let flags = require_matches!(&self.func.component.types[ty.index()], ValueType::Flags(x), x);
+                let flags = require_matches!(&self.component.types[ty.index()], ValueType::Flags(x), x);
 
                 let list = match operands.len() {
                     0 => FlagsList::Single(0),
@@ -293,11 +379,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::VariantLift { variant, name, ty, discriminant, .. } => {
-                let variant_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Variant(x), x);
+                let variant_ty = require_matches!(&self.component.types[ty.index()], ValueType::Variant(x), x);
                 results.push(Value::Variant(crate::values::Variant::new(variant_ty.clone(), *discriminant as usize, operands.pop())?));
             },
             Instruction::UnionLift { union, name, ty, discriminant } => {
-                let union_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Union(x), x);
+                let union_ty = require_matches!(&self.component.types[ty.index()], ValueType::Union(x), x);
                 let value = require_matches!(operands.pop(), Some(x), x);
                 results.push(Value::Union(crate::values::Union::new(union_ty.clone(), *discriminant as usize, value)?));
             },
@@ -306,27 +392,33 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 results.push(Value::S32(en.discriminant() as i32));
             },
             Instruction::EnumLift { enum_, name, ty, discriminant } => {
-                let enum_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Enum(x), x);
+                let enum_ty = require_matches!(&self.component.types[ty.index()], ValueType::Enum(x), x);
                 results.push(Value::Enum(crate::values::Enum::new(enum_ty.clone(), *discriminant as usize)?));
             },
             Instruction::OptionLift { payload, ty, discriminant, .. } => {
-                let option_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Option(x), x);
+                let option_ty = require_matches!(&self.component.types[ty.index()], ValueType::Option(x), x);
                 results.push(Value::Option(OptionValue::new(option_ty.clone(), if *discriminant == 0 { None } else { Some(require_matches!(operands.pop(), Some(x), x)) })?));
             },
             Instruction::ResultLift { result, discriminant, ty, .. } => {
-                let result_ty = require_matches!(&self.func.component.types[ty.index()], ValueType::Result(x), x);
+                let result_ty = require_matches!(&self.component.types[ty.index()], ValueType::Result(x), x);
                 results.push(Value::Result(ResultValue::new(result_ty.clone(), if *discriminant == 0 { std::result::Result::Ok(operands.pop()) } else { std::result::Result::Err(operands.pop()) })?));
             },
             Instruction::CallWasm { name, sig } => {
                 let args = operands.iter().map(TryFrom::try_from).collect::<Result<Vec<_>>>()?;
                 self.flat_results = vec!(wasm_runtime_layer::Value::I32(0); sig.results.len());
-                self.func.callee.call(&mut self.ctx, &args, &mut self.flat_results)?;
+                self.callee_wasm.expect("No available WASM callee.").call(&mut self.ctx.as_context_mut().inner, &args, &mut self.flat_results)?;
                 results.extend(self.flat_results.iter().map(TryFrom::try_from).collect::<Result<Vec<_>>>()?);
             },
-            Instruction::CallInterface { func } => todo!(),
+            Instruction::CallInterface { func } => {
+                for i in 0..func.results.len() {
+                    results.push(Value::S32(0));
+                }
+
+                self.callee_interface.expect("No available interface callee.").call(self.ctx.as_context_mut(), &operands, &mut results[..])?;
+            },
             Instruction::Return { amt, func } => {
-                if let Some(post) = &self.func.post_return {
-                    post.call(&mut self.ctx, &self.flat_results, &mut [])?;
+                if let Some(post) = &self.post_return {
+                    post.call(&mut self.ctx.as_context_mut().inner, &self.flat_results, &mut [])?;
                 }
 
                 for (i, val) in operands.drain(..).enumerate() {
@@ -334,10 +426,10 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::Malloc { realloc, size, align } => {
-                let realloc = self.func.realloc.as_ref().expect("No realloc.");
+                let realloc = self.realloc.as_ref().expect("No realloc.");
                 let args = [wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(*align as i32), wasm_runtime_layer::Value::I32(*size as i32)];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
-                realloc.call(&mut self.ctx, &args, &mut res)?;
+                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
                 require_matches!(&res[0], wasm_runtime_layer::Value::I32(x), results.push(Value::S32(*x)));
             },
             Instruction::GuestDeallocate { size, align } => unreachable!(),
@@ -350,7 +442,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
     }
 
     fn sizes(&self) -> &SizeAlign {
-        &self.func.component.size_align
+        &self.component.size_align
     }
 }
 
@@ -389,12 +481,48 @@ trait ByteArray: Sized {
 impl<const N: usize> ByteArray for [u8; N] {
     fn load(ctx: impl AsContext, memory: &Memory, offset: usize) -> Result<Self> {
         let mut res = [0; N];
-        memory.read(ctx, offset, &mut res)?;
+        memory.read(ctx.as_context().inner, offset, &mut res)?;
         Ok(res)
     }
 
-    fn store(self, ctx: impl AsContextMut, memory: &Memory, offset: usize) -> Result<()> {
-        memory.write(ctx, offset, &self)?;
+    fn store(self, mut ctx: impl AsContextMut, memory: &Memory, offset: usize) -> Result<()> {
+        memory.write(ctx.as_context_mut().inner, offset, &self)?;
         Ok(())
+    }
+}
+
+pub(crate) struct FuncVec<T, E: backend::WasmEngine> {
+    functions: Vec<(Arc<AtomicUsize>, Arc<dyn 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>>)>
+}
+
+impl<T, E: backend::WasmEngine> FuncVec<T, E> {
+    pub fn push(&mut self, f: impl 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>) -> Arc<AtomicUsize> {
+        if self.functions.capacity() == self.functions.len() {
+            self.clear_dead_functions();
+        }
+        let idx = Arc::new(AtomicUsize::new(self.functions.len()));
+        self.functions.push((idx.clone(), Arc::new(f)));
+        idx
+    }
+
+    pub fn get(&self, value: &AtomicUsize) -> Arc<dyn 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>> {
+        self.functions[value.load(Ordering::Acquire)].1.clone()
+    }
+
+    fn clear_dead_functions(&mut self) {
+        let new_len = 2 * self.functions.len();
+        let old = replace(&mut self.functions, Vec::with_capacity(new_len));
+        for (idx, val) in old {
+            if Arc::strong_count(&idx) > 1 {
+                idx.store(self.functions.len(), Ordering::Release);
+                self.functions.push((idx, val));
+            }
+        }
+    }
+}
+
+impl<T, E: backend::WasmEngine> Default for FuncVec<T, E> {
+    fn default() -> Self {
+        Self { functions: Vec::new() }
     }
 }
