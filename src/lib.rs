@@ -6,7 +6,6 @@ mod types;
 mod values;
 
 use anyhow::*;
-use once_cell::sync::*;
 pub use crate::func::*;
 pub use crate::types::*;
 pub use crate::values::*;
@@ -54,7 +53,7 @@ impl Component {
         let mut modules = FxHashMap::with_capacity_and_hasher(module_data.len(), Default::default());
 
         for (id, module) in module_data {
-            modules.insert(id, Module::new(engine, std::io::Cursor::new(module.wasm))?);
+            modules.insert(id, ModuleTranslation { module: Module::new(engine, std::io::Cursor::new(module.wasm))?, translation: module.module });
         }
         
         let mut size_align = SizeAlign::default();
@@ -135,34 +134,37 @@ impl Component {
                     }
                 },
                 GlobalInitializer::LowerImport { index, import } => {
+                    let (idx, lowering_opts) = lowering_options[*index];
                     let (import_index, path) = &inner.translation.component.imports[*import];
                     let (import_name, _) = &inner.translation.component.import_types[*import_index];
                     let world_key = &imports[import_name];
 
-                    let (core, imp) = match &inner.resolve.worlds[inner.world_id].imports[world_key] {
+                    let imp = match &inner.resolve.worlds[inner.world_id].imports[world_key] {
                         WorldItem::Function(func) => {
                             assert_eq!(path.len(), 0);
-                            (CoreImport { module: root_name.clone(), name: import_name.as_str().into() }, ComponentImport {
+                            ComponentImport {
                                 instance: None,
+                                name: import_name.as_str().into(),
                                 func: func.clone(),
-                                options: lowering_options[*index].clone()
-                            })
+                                options: lowering_opts.clone()
+                            }
                         }
                         WorldItem::Interface(i) => {
                             assert_eq!(path.len(), 1);
                             let iface = &inner.resolve.interfaces[*i];
                             let func = &iface.functions[&path[0]];
-                            let imp_name = Arc::<str>::from(import_name.as_str());
-                            (CoreImport { module: imp_name.clone(), name: path[0].as_str().into() }, ComponentImport {
+
+                            let imp_name = Arc::<str>::from(&import_name[..import_name.find('@').unwrap_or(import_name.len())]);
+                            ComponentImport {
                                 instance: Some(imp_name),
+                                name: path[0].as_str().into(),
                                 func: func.clone(),
-                                options: lowering_options[*index].clone()
-                            })
+                                options: lowering_opts.clone()
+                            }
                         }
                         WorldItem::Type(_) => unreachable!(),
                     };
 
-                    //
                     let inst = if let Some(inst) = &imp.instance {
                         inner.import_types.instances.entry(inst.clone()).or_insert_with(ImportTypesInstance::new)
                     }
@@ -170,9 +172,9 @@ impl Component {
                         &mut inner.import_types.root
                     };
 
-                    ensure!(inst.functions.insert(core.name.clone(), crate::types::FuncType::from_resolve(&imp.func, &inner.resolve)?).is_none(), "Attempted to insert duplicate import.");
+                    ensure!(inst.functions.insert(imp.name.clone(), crate::types::FuncType::from_resolve(&imp.func, &inner.resolve)?).is_none(), "Attempted to insert duplicate import.");
 
-                    ensure!(inner.imported_functions.insert(core, imp).is_none(), "Attempted to insert duplicate import.");
+                    ensure!(inner.imported_functions.insert(idx, imp).is_none(), "Attempted to insert duplicate import.");
                 },
                 _ => bail!("Not yet implemented {initializer:?}.")
             }
@@ -181,11 +183,11 @@ impl Component {
         Ok(inner)
     }
 
-    fn get_lowering_options<'a>(trampolines: &'a wasmtime_environ::PrimaryMap<TrampolineIndex, Trampoline>) -> wasmtime_environ::PrimaryMap<LoweredIndex, &'a CanonicalOptions> {
+    fn get_lowering_options<'a>(trampolines: &'a wasmtime_environ::PrimaryMap<TrampolineIndex, Trampoline>) -> wasmtime_environ::PrimaryMap<LoweredIndex, (TrampolineIndex, &'a CanonicalOptions)> {
         let mut lowers = wasmtime_environ::PrimaryMap::default();
-        for (_, trampoline) in trampolines {
+        for (idx, trampoline) in trampolines {
             if let Trampoline::LowerImport { index, lower_ty, options } = trampoline {
-                assert!(lowers.push(options) == *index, "Indices did not match.");
+                assert!(lowers.push((idx, options)) == *index, "Indices did not match.");
             }
         }
         lowers
@@ -306,10 +308,10 @@ struct ComponentInner {
     pub extracted_memories: FxHashMap<RuntimeMemoryIndex, CoreExport<MemoryIndex>>,
     pub extracted_reallocs: FxHashMap<RuntimeReallocIndex, CoreExport<wasmtime_environ::EntityIndex>>,
     pub extracted_post_returns: FxHashMap<RuntimePostReturnIndex, CoreExport<wasmtime_environ::EntityIndex>>,
-    pub imported_functions: FxHashMap<CoreImport, ComponentImport>,
+    pub imported_functions: FxHashMap<TrampolineIndex, ComponentImport>,
     pub import_types: ImportTypes,
     pub instance_modules: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, StaticModuleIndex>,
-    pub modules: FxHashMap<StaticModuleIndex, Module>,
+    pub modules: FxHashMap<StaticModuleIndex, ModuleTranslation>,
     pub resolve: Resolve,
     pub size_align: SizeAlign,
     pub translation: ComponentTranslation,
@@ -321,6 +323,11 @@ impl std::fmt::Debug for ComponentInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ComponentInner").finish()
     }
+}
+
+struct ModuleTranslation {
+    pub module: Module,
+    pub translation: wasmtime_environ::Module
 }
 
 #[derive(Debug)]
@@ -473,7 +480,12 @@ pub struct Instance(Arc<InstanceInner>);
 
 impl Instance {
     pub(crate) fn new(mut ctx: impl AsContextMut, component: &Component, linker: &Linker) -> Result<Self> {
-        let instance = InstanceInner { component: component.0.clone(), instances: Default::default(), funcs: FxHashMap::default() };
+        let mut instance_flags = wasmtime_environ::PrimaryMap::default();
+        for i in 0..component.0.instance_modules.len() {
+            instance_flags.push(Global::new(ctx.as_context_mut().inner, wasm_runtime_layer::Value::I32(wasmtime_environ::component::FLAG_MAY_LEAVE | wasmtime_environ::component::FLAG_MAY_ENTER), true));
+        }
+
+        let instance = InstanceInner { component: component.0.clone(), instances: Default::default(), instance_flags, funcs: FxHashMap::default() };
         let initialized = Self::global_initialize(instance, &mut ctx, linker)?;
         let exported = Self::load_exports(initialized, &ctx)?;
         Ok(Self(Arc::new(exported)))
@@ -493,7 +505,7 @@ impl Instance {
         Ok(inner)
     }
 
-    fn import_function(inner: &InstanceInner, ctx: impl AsContext, options: CanonicalOptions, func: Function) -> GuestInvokeOptions {
+    fn import_function(inner: &InstanceInner, ctx: impl AsContext, options: &CanonicalOptions, func: &Function) -> GuestInvokeOptions {
         let memory = options.memory.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_memories[&idx]).expect("Could not get runtime memory export.").into_memory().expect("Export was not of memory type."));
         let realloc = options.realloc.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_reallocs[&idx]).expect("Could not get runtime realloc export.").into_func().expect("Export was not of func type."));
         let post_return = options.post_return.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_post_returns[&idx]).expect("Could not get runtime post return export.").into_func().expect("Export was not of func type."));
@@ -501,7 +513,7 @@ impl Instance {
         GuestInvokeOptions {
             component: inner.component.clone(),
             encoding: options.string_encoding,
-            function: func,
+            function: func.clone(),
             memory,
             realloc,
             post_return
@@ -529,35 +541,47 @@ impl Instance {
         })
     }
 
+    fn core_import(inner: &InstanceInner, mut ctx: impl AsContextMut, def: &CoreDef, linker: &Linker, ty: ExternType) -> Result<Extern> {
+        match def {
+            CoreDef::Export(x) => Self::core_export(inner, ctx, x).context("Could not find exported function."),
+            CoreDef::Trampoline(x) => {
+                let component_import = inner.component.imported_functions.get(x).context("Could not find exported trampoline.")?;
+                let func = Self::get_component_import(component_import, linker)?;
+                let guest_options = Self::import_function(inner, &ctx, &component_import.options, &component_import.func);
+                
+                let ty = if let ExternType::Func(x) = ty { x } else { bail!("Incorrect extern type.") };
+
+                Ok(Extern::Func(Func::new(ctx.as_context_mut().inner, ty, move |ctx, args, results| {
+                    let ctx = StoreContextMut { inner: ctx };
+                    func.call_from_guest(ctx, &guest_options, args, results)
+                })))
+            },
+            CoreDef::InstanceFlags(i) => Ok(Extern::Global(inner.instance_flags[*i].clone()))
+        }
+    }
+
     fn core_export<T: Copy + Into<wasmtime_environ::EntityIndex>>(inner: &InstanceInner, ctx: impl AsContext, export: &CoreExport<T>) -> Option<Extern> {
         let name = match &export.item {
             ExportItem::Index(idx) => &inner.component.export_mapping[&inner.component.instance_modules[export.instance]][&(*idx).into()],
             ExportItem::Name(s) => s,
         };
 
-        println!("need instancee {:?}", export.instance);
         inner.instances[export.instance].get_export(&ctx.as_context().inner, &name)
     }
 
     fn global_initialize(mut inner: InstanceInner, mut ctx: impl AsContextMut, linker: &Linker) -> Result<InstanceInner> {
-        println!("Initializers include {:?}", inner.component.translation.component.initializers);
         for initializer in &inner.component.translation.component.initializers {
             match initializer {
                 GlobalInitializer::InstantiateModule(InstantiateModule::Static(idx, def)) => {
-                    println!("Instantiate module {idx:?} (needs defs {def:?})");
                     let module = &inner.component.modules[idx];
-                    let (imports, to_fill) = Self::generate_imports(&inner, &mut ctx, linker, module)?;
-                    let instance = wasm_runtime_layer::Instance::new(&mut ctx.as_context_mut().inner, module, &imports)?;
+                    let imports = Self::generate_imports(&inner, &mut ctx, linker, module, &def)?;
+                    let instance = wasm_runtime_layer::Instance::new(&mut ctx.as_context_mut().inner, &module.module, &imports)?;
                     inner.instances.push(instance);
-
-                    for (val, options, func) in to_fill {
-                        drop(val.set(Self::import_function(&inner, &ctx, options, func)));
-                    }
                 },
                 GlobalInitializer::ExtractMemory(_) => {},
                 GlobalInitializer::ExtractRealloc(_) => {},
                 GlobalInitializer::ExtractPostReturn(_) => {},
-                GlobalInitializer::LowerImport { .. } => {}
+                GlobalInitializer::LowerImport { .. } => { }
                 _ => bail!("Not yet implemented {initializer:?}.")
             }
         }
@@ -565,32 +589,28 @@ impl Instance {
         Ok(inner)
     }
 
-    fn generate_imports(inner: &InstanceInner, mut store: impl AsContextMut, linker: &Linker, module: &Module) -> Result<(Imports, Vec<(Arc<OnceCell<GuestInvokeOptions>>, CanonicalOptions, Function)>)> {
-        let mut imports = Imports::default();
-        let mut options_to_fill = Vec::default();
-        
-        let core_imports = module.imports(store.as_context().engine()).filter_map(|x| x.ty.func().map(|y| (Arc::<str>::from(x.module), Arc::<str>::from(x.name), y.clone()))).collect::<Vec<_>>();
-        for (module, name, ty) in core_imports {
-            if let Some(component_import) = inner.component.imported_functions.get(&CoreImport { module: module.clone(), name: name.clone() }) {
-                let func = Self::get_component_import(&name, component_import, linker)?;
+    fn generate_imports(inner: &InstanceInner, mut store: impl AsContextMut, linker: &Linker, module: &ModuleTranslation, defs: &[CoreDef]) -> Result<Imports> {
+        let mut import_ty_map = FxHashMap::default();
 
-                let guest_options = Arc::new(OnceCell::new());
-                options_to_fill.push((guest_options.clone(), component_import.options.clone(), component_import.func.clone()));
-
-                imports.define(&module, &name, Extern::Func(Func::new(store.as_context_mut().inner, ty, move |ctx, args, results| {
-                    let ctx = StoreContextMut { inner: ctx };
-                    func.call_from_guest(ctx, &guest_options.get().expect("Function was not initialized."), args, results)
-                })));
-            }
-            else {
-                bail!("Undefined import {module:?} {name:?}")
-            }
+        let engine = store.as_context().engine().clone();
+        for import in module.module.imports(&engine) {
+            import_ty_map.insert((import.module, import.name), import.ty.clone());
         }
 
-        Ok((imports, options_to_fill))
+        let mut imports = Imports::default();
+
+        for (host, name, def) in module.translation
+            .imports()
+            .zip(defs)
+            .map(|((module, name, _), arg)| (module, name, arg)) {
+            let ty = import_ty_map.get(&(host, name)).context("Unrecognized import.")?.clone();
+            imports.define(host, name, Self::core_import(inner, &mut store, def, linker, ty)?);
+        }
+
+        Ok(imports)
     }
 
-    fn get_component_import(name: &str, import: &ComponentImport, linker: &Linker) -> Result<crate::func::Func> {
+    fn get_component_import(import: &ComponentImport, linker: &Linker) -> Result<crate::func::Func> {
         let inst = if let Some(name) = &import.instance {
             linker.instance(name).ok_or_else(|| Error::msg(format!("Could not find imported interface {name}")))?
         }
@@ -598,26 +618,22 @@ impl Instance {
             linker.root()
         };
 
-        inst.func(name).ok_or_else(|| Error::msg(format!("Could not find function import {name}")))
+        inst.func(&import.name).ok_or_else(|| Error::msg(format!("Could not find function import {}", import.name)))
     }
 }
 
 #[derive(Debug)]
 struct InstanceInner {
     pub component: Arc<ComponentInner>,
+    pub instance_flags: wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>,
     pub instances: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, wasm_runtime_layer::Instance>,
-    pub funcs: FxHashMap<(String, String), crate::func::Func>
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct CoreImport {
-    pub module: Arc<str>,
-    pub name: Arc<str>
+    pub funcs: FxHashMap<(String, String), crate::func::Func>,
 }
 
 #[derive(Clone, Debug)]
 struct ComponentImport {
     pub instance: Option<Arc<str>>,
+    pub name: Arc<str>,
     pub func: Function,
     pub options: CanonicalOptions
 }
@@ -837,20 +853,27 @@ mod tests {
 
     #[test]
     fn test_imports() {
+        const WASM_0: &[u8] = include_bytes!("test_guest_component.wasm");
         const WASM: &[u8] = include_bytes!("test_guest_component2.wasm");
 
         let engine = Engine::new(wasmi::Engine::default());
         let mut store = Store::new(&engine, ());
+        let comp_0 = Component::new(&engine, WASM_0).unwrap();
         let comp = Component::new(&engine, WASM).unwrap();
 
         let mut linker = Linker::default();
-        
+
+        let inst_0 = linker.instantiate(&mut store, &comp_0).unwrap();
+
         let func_ty = comp.imports().instance("test:guest/tester").unwrap().func("get-a-string").unwrap();
-        linker.define_instance("test:guest/tester").unwrap().define_func("get-a-string", crate::func::Func::new(&mut store, func_ty, |_, _, results| {
-            results[0] = crate::values::Value::String("borger".into());
-            Ok(())
-        }));
+
+        linker.define_instance("test:guest/tester").unwrap().define_func("get-a-string", inst_0.0.funcs.get(&("test:guest/tester".to_string(), "get-a-string".to_string())).unwrap().clone()).unwrap();
 
         let inst = linker.instantiate(&mut store, &comp).unwrap();
+        let double = inst.0.funcs.get(&("".to_string(), "doubled-string".to_string())).unwrap();
+
+        let mut res = [crate::values::Value::Bool(false)];
+        double.call(&mut store, &[], &mut res).unwrap();
+        println!("AND HIS NAMES {res:?}");
     }
 }

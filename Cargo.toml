@@ -7,7 +7,6 @@ edition = "2021"
 anyhow = "1.0.72"
 fxhash = "0.2.1"
 id-arena = "2.2.1"
-once_cell = "1.18.0"
 ref-cast = "1.0.19"
 wasm_runtime_layer = { version = "0.1.1", features = [ "backend_wasmi" ] }
 wasmtime-environ = { git = "https://github.com/bytecodealliance/wasmtime", branch = "release-12.0.0", features = [ "component-model" ] }
