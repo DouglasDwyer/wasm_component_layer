@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.72"
+bytemuck = { version = "1.13.1", features = [ "extern_crate_alloc" ] }
 fxhash = "0.2.1"
 id-arena = "2.2.1"
 ref-cast = "1.0.19"

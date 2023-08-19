@@ -2,6 +2,7 @@ use anyhow::*;
 use crate::types::*;
 use std::ops::*;
 use std::sync::*;
+use private::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -58,6 +59,7 @@ impl Value {
         }
     }
 }
+
 impl TryFrom<&Value> for wasm_runtime_layer::Value {
     type Error = Error;
 
@@ -86,45 +88,115 @@ impl TryFrom<&wasm_runtime_layer::Value> for Value {
     }
 }
 
+macro_rules! impl_primitive_from {
+    ($(($type_name: ident, $enum_name: ident))*) => {
+        $(
+            impl From<$type_name> for Value {
+                fn from(value: $type_name) -> Value {
+                    Value::$enum_name(value)
+                }
+            }
+
+            impl TryFrom<Value> for $type_name {
+                type Error = Error;
+
+                fn try_from(value: Value) -> Result<Self> {
+                    if let Value::$enum_name(x) = value {
+                        Ok(x)
+                    }
+                    else {
+                        bail!("Incorrect value type. Got {:?}", value.ty())
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_primitive_from!((bool, Bool) (i8, S8) (u8, U8) (i16, S16) (u16, U16) (i32, S32) (u32, U32) (i64, S64) (u64, U64) (f32, F32) (f64, F64) (char, Char));
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct List {
-    values: Arc<[Value]>,
+    values: ListSpecialization,
     ty: ListType
 }
 
 impl List {
     pub fn new(ty: ListType, values: impl IntoIterator<Item = Value>) -> Result<Self> {
-        Ok(Self { values: values.into_iter().map(|x| (x.ty() == ty.element_ty()).then_some(x).ok_or_else(|| Error::msg("List elements were not all of the same type."))).collect::<Result<_>>()?, ty })
+        let values = match ty.element_ty() {
+            ValueType::Bool => bool::from_value_iter(values)?,
+            ValueType::S8 => i8::from_value_iter(values)?,
+            ValueType::U8 => u8::from_value_iter(values)?,
+            ValueType::S16 => i16::from_value_iter(values)?,
+            ValueType::U16 => u16::from_value_iter(values)?,
+            ValueType::S32 => i32::from_value_iter(values)?,
+            ValueType::U32 => u32::from_value_iter(values)?,
+            ValueType::S64 => i64::from_value_iter(values)?,
+            ValueType::U64 => u64::from_value_iter(values)?,
+            ValueType::F32 => f32::from_value_iter(values)?,
+            ValueType::F64 => f64::from_value_iter(values)?,
+            ValueType::Char => char::from_value_iter(values)?,
+            _ => ListSpecialization::Other(values.into_iter().map(|x| (x.ty() == ty.element_ty()).then_some(x).ok_or_else(|| Error::msg("List elements were not all of the same type."))).collect::<Result<_>>()?)
+        };
+
+        Ok(Self { values, ty })
     }
 
     pub fn ty(&self) -> ListType {
         self.ty.clone()
     }
-}
 
-impl Deref for List {
-    type Target = [Value];
-
-    fn deref(&self) -> &Self::Target {
-        &self.values
+    pub fn typed<T: ListPrimitive>(&self) -> Result<&[T]> {
+        if self.ty.element_ty() == T::ty() {
+            Ok(T::from_specialization(&self.values))
+        }
+        else {
+            bail!("List type mismatch: expected {:?} but got {:?}", T::ty(), self.ty());
+        }
     }
-}
 
-impl IntoIterator for List {
-    type IntoIter = std::vec::IntoIter<Value>;
-    type Item = Value;
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.values.iter().cloned().collect::<Vec<_>>().into_iter()
+    pub fn len(&self) -> usize {
+        match &self.values {
+            ListSpecialization::Bool(x) => x.len(),
+            ListSpecialization::S8(x) => x.len(),
+            ListSpecialization::U8(x) => x.len(),
+            ListSpecialization::S16(x) => x.len(),
+            ListSpecialization::U16(x) => x.len(),
+            ListSpecialization::S32(x) => x.len(),
+            ListSpecialization::U32(x) => x.len(),
+            ListSpecialization::S64(x) => x.len(),
+            ListSpecialization::U64(x) => x.len(),
+            ListSpecialization::F32(x) => x.len(),
+            ListSpecialization::F64(x) => x.len(),
+            ListSpecialization::Char(x) => x.len(),
+            ListSpecialization::Other(x) => x.len(),
+        }
     }
 }
 
 impl<'a> IntoIterator for &'a List {
-    type IntoIter = std::slice::Iter<'a, Value>;
-    type Item = &'a Value;
+    type IntoIter = ListSpecializationIter<'a>;
+
+    type Item = Value;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.values.iter()
+        self.values.into_iter()
+    }
+}
+
+impl<T: ListPrimitive> From<&[T]> for List {
+    fn from(value: &[T]) -> Self {
+        Self { values: T::from_arc(value.into()), ty: ListType::new(T::ty()) }
+    }
+}
+
+impl<T: ListPrimitive> From<Arc<[T]>> for List {
+    fn from(value: Arc<[T]>) -> Self {
+        Self { values: T::from_arc(value), ty: ListType::new(T::ty()) }
     }
 }
 
@@ -439,4 +511,128 @@ impl Flags {
 pub(crate) enum FlagsList {
     Single(u32),
     Multiple(Arc<Vec<u32>>)
+}
+
+mod private {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum ListSpecialization {
+        Bool(Arc<[bool]>),
+        S8(Arc<[i8]>),
+        U8(Arc<[u8]>),
+        S16(Arc<[i16]>),
+        U16(Arc<[u16]>),
+        S32(Arc<[i32]>),
+        U32(Arc<[u32]>),
+        S64(Arc<[i64]>),
+        U64(Arc<[u64]>),
+        F32(Arc<[f32]>),
+        F64(Arc<[f64]>),
+        Char(Arc<[char]>),
+        Other(Arc<[Value]>)
+    }
+
+    impl<'a> IntoIterator for &'a ListSpecialization {
+        type Item = Value;
+
+        type IntoIter = ListSpecializationIter<'a>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            match self {
+                ListSpecialization::Bool(x) => ListSpecializationIter::Bool(x.iter()),
+                ListSpecialization::S8(x) => ListSpecializationIter::S8(x.iter()),
+                ListSpecialization::U8(x) => ListSpecializationIter::U8(x.iter()),
+                ListSpecialization::S16(x) => ListSpecializationIter::S16(x.iter()),
+                ListSpecialization::U16(x) => ListSpecializationIter::U16(x.iter()),
+                ListSpecialization::S32(x) => ListSpecializationIter::S32(x.iter()),
+                ListSpecialization::U32(x) => ListSpecializationIter::U32(x.iter()),
+                ListSpecialization::S64(x) => ListSpecializationIter::S64(x.iter()),
+                ListSpecialization::U64(x) => ListSpecializationIter::U64(x.iter()),
+                ListSpecialization::F32(x) => ListSpecializationIter::F32(x.iter()),
+                ListSpecialization::F64(x) => ListSpecializationIter::F64(x.iter()),
+                ListSpecialization::Char(x) => ListSpecializationIter::Char(x.iter()),
+                ListSpecialization::Other(x) => ListSpecializationIter::Other(x.iter()),
+            }
+        }
+    }
+
+    pub enum ListSpecializationIter<'a> {
+        Bool(std::slice::Iter<'a, bool>),
+        S8(std::slice::Iter<'a, i8>),
+        U8(std::slice::Iter<'a, u8>),
+        S16(std::slice::Iter<'a, i16>),
+        U16(std::slice::Iter<'a, u16>),
+        S32(std::slice::Iter<'a, i32>),
+        U32(std::slice::Iter<'a, u32>),
+        S64(std::slice::Iter<'a, i64>),
+        U64(std::slice::Iter<'a, u64>),
+        F32(std::slice::Iter<'a, f32>),
+        F64(std::slice::Iter<'a, f64>),
+        Char(std::slice::Iter<'a, char>),
+        Other(std::slice::Iter<'a, Value>)
+    }
+
+    impl<'a> Iterator for ListSpecializationIter<'a> {
+        type Item = Value;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            Some(match self {
+                ListSpecializationIter::Bool(x) => Value::from(*x.next()?),
+                ListSpecializationIter::S8(x) => Value::from(*x.next()?),
+                ListSpecializationIter::U8(x) => Value::from(*x.next()?),
+                ListSpecializationIter::S16(x) => Value::from(*x.next()?),
+                ListSpecializationIter::U16(x) => Value::from(*x.next()?),
+                ListSpecializationIter::S32(x) => Value::from(*x.next()?),
+                ListSpecializationIter::U32(x) => Value::from(*x.next()?),
+                ListSpecializationIter::S64(x) => Value::from(*x.next()?),
+                ListSpecializationIter::U64(x) => Value::from(*x.next()?),
+                ListSpecializationIter::F32(x) => Value::from(*x.next()?),
+                ListSpecializationIter::F64(x) => Value::from(*x.next()?),
+                ListSpecializationIter::Char(x) => Value::from(*x.next()?),
+                ListSpecializationIter::Other(x) => x.next()?.clone(),
+            })
+        }
+    }
+
+    pub trait ListPrimitive: Copy + Sized {
+        fn from_arc(arc: Arc<[Self]>) -> ListSpecialization;
+        fn from_value_iter(iter: impl IntoIterator<Item = Value>) -> Result<ListSpecialization>;
+
+        fn from_specialization(specialization: &ListSpecialization) -> &[Self];
+        
+        fn ty() -> ValueType;
+    }
+
+    macro_rules! impl_list_primitive {
+        ($(($type_name: ident, $enum_name: ident))*) => {
+            $(
+                impl ListPrimitive for $type_name {
+                    fn from_arc(arc: Arc<[Self]>) -> ListSpecialization {
+                        ListSpecialization::$enum_name(arc)
+                    }
+
+                    fn from_value_iter(iter: impl IntoIterator<Item = Value>) -> Result<ListSpecialization> {
+                        let values: Arc<[Self]> = iter.into_iter().map(|x| x.try_into()).collect::<Result<_>>()?;
+                        Ok(ListSpecialization::$enum_name(values))
+                    }
+            
+                    fn from_specialization(specialization: &ListSpecialization) -> &[Self] {
+                        if let ListSpecialization::$enum_name(vals) = specialization {
+                            &vals
+                        }
+                        else {
+                            panic!("Incorrect specialization type.");
+                        }
+                    }
+            
+                    fn ty() -> ValueType {
+                        ValueType::$enum_name
+                    }
+                }
+            )*
+        };
+    }
+
+    impl_list_primitive!((bool, Bool) (i8, S8) (u8, U8) (i16, S16) (u16, U16) (i32, S32) (u32, U32) (i64, S64) (u64, U64) (f32, F32) (f64, F64) (char, Char));
 }

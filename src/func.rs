@@ -1,3 +1,4 @@
+use bytemuck::*;
 use crate::*;
 use crate::{AsContext, AsContextMut, StoreContext, StoreContextMut};
 use crate::abi::*;
@@ -175,6 +176,16 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
     fn store<B: Blittable>(&mut self, offset: usize, value: B) -> Result<()> {
         value.to_bytes().store(&mut self.ctx, self.memory.as_ref().expect("No memory."), offset)
     }
+
+    fn load_array<B: Blittable>(&self, offset: usize, len: usize) -> Result<Arc<[B]>> {
+        let mut raw_memory = B::zeroed_array(len);
+        self.memory.as_ref().expect("No memory").read(self.ctx.as_context().inner, offset, &mut Arc::get_mut(&mut raw_memory).expect("Could not get exclusive reference."))?;
+        Ok(B::from_le_array(raw_memory))
+    }
+
+    fn store_array<B: Blittable>(&mut self, offset: usize, value: &[B]) -> Result<()> {
+        self.memory.as_ref().expect("No memory.").write(self.ctx.as_context_mut().inner, offset, B::to_le_slice(value))
+    }
 }
 
 impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
@@ -271,6 +282,34 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 results.push(Value::S32(ptr));
                 results.push(Value::S32(encoded.len() as i32));
             },
+            Instruction::ListCanonLower { element, realloc } => {
+                let list = require_matches!(operands.pop(), Some(Value::List(x)), x);
+                let align = self.component.size_align.align(element);
+                let size = self.component.size_align.size(element);
+
+                let realloc = self.realloc.as_ref().expect("No realloc.");
+                let args = [wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(0), wasm_runtime_layer::Value::I32(align as i32), wasm_runtime_layer::Value::I32((list.len() * size) as i32)];
+                let mut res = [wasm_runtime_layer::Value::I32(0)];
+                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                let ptr = require_matches!(res[0], wasm_runtime_layer::Value::I32(x), x);
+
+                match element {
+                    Type::U8 => self.store_array(ptr as usize, list.typed::<u8>()?)?,
+                    Type::U16 => self.store_array(ptr as usize, list.typed::<u16>()?)?,
+                    Type::U32 => self.store_array(ptr as usize, list.typed::<u32>()?)?,
+                    Type::U64 => self.store_array(ptr as usize, list.typed::<u64>()?)?,
+                    Type::S8 => self.store_array(ptr as usize, list.typed::<i8>()?)?,
+                    Type::S16 => self.store_array(ptr as usize, list.typed::<i16>()?)?,
+                    Type::S32 => self.store_array(ptr as usize, list.typed::<i32>()?)?,
+                    Type::S64 => self.store_array(ptr as usize, list.typed::<i64>()?)?,
+                    Type::Float32 => self.store_array(ptr as usize, list.typed::<f32>()?)?,
+                    Type::Float64 => self.store_array(ptr as usize, list.typed::<f64>()?)?,
+                    _ => unreachable!()
+                }
+
+                results.push(Value::S32(ptr));
+                results.push(Value::S32(list.len() as i32));
+            },
             Instruction::ListLower { element, realloc, len } => {
                 let list = require_matches!(operands.pop(), Some(Value::List(x)), x);
                 let align = self.component.size_align.align(element);
@@ -309,6 +348,24 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     },
                 }
             },
+            Instruction::ListCanonLift { element, ty } => {
+                let len = require_matches!(operands.pop(), Some(Value::S32(x)), x);
+                let ptr = require_matches!(operands.pop(), Some(Value::S32(x)), x);
+                
+                results.push(Value::List(match element {
+                    Type::U8 => self.load_array::<u8>(ptr as usize, len as usize)?.into(),
+                    Type::U16 => self.load_array::<u16>(ptr as usize, len as usize)?.into(),
+                    Type::U32 => self.load_array::<u32>(ptr as usize, len as usize)?.into(),
+                    Type::U64 => self.load_array::<u64>(ptr as usize, len as usize)?.into(),
+                    Type::S8 => self.load_array::<i8>(ptr as usize, len as usize)?.into(),
+                    Type::S16 => self.load_array::<i16>(ptr as usize, len as usize)?.into(),
+                    Type::S32 => self.load_array::<i32>(ptr as usize, len as usize)?.into(),
+                    Type::S64 => self.load_array::<i64>(ptr as usize, len as usize)?.into(),
+                    Type::Float32 => self.load_array::<f32>(ptr as usize, len as usize)?.into(),
+                    Type::Float64 => self.load_array::<f64>(ptr as usize, len as usize)?.into(),
+                    _ => unreachable!()
+                }));
+            }
             Instruction::ListLift { element, ty, len } => {
                 let ty = self.component.types[ty.index()].clone();
                 results.push(Value::List(List::new(require_matches!(ty, crate::types::ValueType::List(x), x), operands.drain(..))?));
@@ -444,6 +501,27 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
     fn sizes(&self) -> &SizeAlign {
         &self.component.size_align
     }
+
+    fn is_list_canonical(&self, element: &Type) -> bool {
+        const LITTLE_ENDIAN: bool = cfg!(target_endian = "little");
+
+        match element {
+            Type::Bool => false,
+            Type::U8 => true,
+            Type::U16 => LITTLE_ENDIAN,
+            Type::U32 => LITTLE_ENDIAN,
+            Type::U64 => LITTLE_ENDIAN,
+            Type::S8 => true,
+            Type::S16 => LITTLE_ENDIAN,
+            Type::S32 => LITTLE_ENDIAN,
+            Type::S64 => LITTLE_ENDIAN,
+            Type::Float32 => LITTLE_ENDIAN,
+            Type::Float64 => LITTLE_ENDIAN,
+            Type::Char => false,
+            Type::String => false,
+            Type::Id(_) => false,
+        }
+    }
 }
 
 trait Blittable: Sized {
@@ -451,6 +529,10 @@ trait Blittable: Sized {
 
     fn from_bytes(array: Self::Array) -> Self;
     fn to_bytes(self) -> Self::Array;
+
+    fn zeroed_array(len: usize) -> Arc<[u8]>;
+    fn from_le_array(array: Arc<[u8]>) -> Arc<[Self]>;
+    fn to_le_slice(data: &[Self]) -> &[u8];
 }
 
 macro_rules! impl_blittable {
@@ -465,6 +547,20 @@ macro_rules! impl_blittable {
 
                 fn to_bytes(self) -> Self::Array {
                     Self::to_le_bytes(self)
+                }
+
+                fn zeroed_array(len: usize) -> Arc<[u8]> {
+                    Arc::from(cast_slice_box(zeroed_slice_box::<Self>(len)))
+                }
+
+                fn from_le_array(array: Arc<[u8]>) -> Arc<[Self]> {
+                    assert!(cfg!(target_endian = "little"), "Attempted to bitcast to little-endian bytes on a big endian platform.");
+                    cast_slice_arc(array)
+                }
+
+                fn to_le_slice(data: &[Self]) -> &[u8] {
+                    assert!(cfg!(target_endian = "little"), "Attempted to bitcast to little-endian bytes on a big endian platform.");
+                    cast_slice(data)
                 }
             }
         )*

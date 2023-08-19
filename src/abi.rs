@@ -229,6 +229,37 @@ def_instruction! {
         /// Creates an `i32` from a `bool` input, must return 0 or 1.
         I32FromBool : [1] => [1],
 
+        /// Lowers a list where the element's layout in the native language is
+        /// expected to match the canonical ABI definition of interface types.
+        ///
+        /// Pops a list value from the stack and pushes the pointer/length onto
+        /// the stack. If `realloc` is set to `Some` then this is expected to
+        /// *consume* the list which means that the data needs to be copied. An
+        /// allocation/copy is expected when:
+        ///
+        /// * A host is calling a wasm export with a list (it needs to copy the
+        ///   list in to the callee's module, allocating space with `realloc`)
+        /// * A wasm export is returning a list (it's expected to use `realloc`
+        ///   to give ownership of the list to the caller.
+        /// * A host is returning a list in a import definition, meaning that
+        ///   space needs to be allocated in the caller with `realloc`).
+        ///
+        /// A copy does not happen (e.g. `realloc` is `None`) when:
+        ///
+        /// * A wasm module calls an import with the list. In this situation
+        ///   it's expected the caller will know how to access this module's
+        ///   memory (e.g. the host has raw access or wasm-to-wasm communication
+        ///   would copy the list).
+        ///
+        /// If `realloc` is `Some` then the adapter is not responsible for
+        /// cleaning up this list because the other end is receiving the
+        /// allocation. If `realloc` is `None` then the adapter is responsible
+        /// for cleaning up any temporary allocation it created, if any.
+        ListCanonLower {
+            element: &'a Type,
+            realloc: Option<&'a str>,
+        } : [1] => [2],
+
         /// Pops a string from the stack, lowers it into guest memory, and pushes a pointer and length onto the stack.
         StringLower {
             realloc: Option<&'a str>,
@@ -253,6 +284,20 @@ def_instruction! {
             realloc: Option<&'a str>,
             len: Cell<i32>
         } : [1] => [(len.get() as usize) + 3],
+
+        /// Lifts a list which has a canonical representation into an interface
+        /// types value.
+        ///
+        /// The term "canonical" representation here means that the
+        /// representation of the interface types value in the native language
+        /// exactly matches the canonical ABI definition of the type.
+        ///
+        /// This will consume two `i32` values from the stack, a pointer and a
+        /// length, and then produces an interface value list.
+        ListCanonLift {
+            element: &'a Type,
+            ty: TypeId,
+        } : [2] => [1],
 
         /// Pops a length and pointer off of the stack, and lifts a string.
         StringLift : [2] => [1],
@@ -528,6 +573,9 @@ pub trait Bindgen {
 
     /// Returns size information that was previously calculated for all types.
     fn sizes(&self) -> &SizeAlign;
+
+    /// Determines whether a list's language-specific representation matches the canonical representation.
+    fn is_list_canonical(&self, element: &Type) -> bool;
 }
 
 pub struct Generator<'a, B: Bindgen> {
@@ -809,18 +857,23 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 TypeDefKind::Type(t) => self.lower(t),
                 TypeDefKind::List(element) => {
                     let realloc = self.list_realloc();
-                    let lower = ListLower { element, realloc, len: Cell::default() };
-                    self.emit(&lower)?;
-
-                    let stride = self.bindgen.sizes().size(element) as i32;
-                    let len = if let ListLower { len, .. } = lower { len.get() } else { unreachable!() };
-
-                    let addr = self.stack.pop().unwrap();
-
-                    for i in (0..len).rev() {
-                        self.write_to_memory(element, addr.clone(), i * stride)?;
+                    if self.bindgen.is_list_canonical(element) {
+                        self.emit(&ListCanonLower { element, realloc })
                     }
-                    Ok(())
+                    else {
+                        let lower = ListLower { element, realloc, len: Cell::default() };
+                        self.emit(&lower)?;
+    
+                        let stride = self.bindgen.sizes().size(element) as i32;
+                        let len = if let ListLower { len, .. } = lower { len.get() } else { unreachable!() };
+    
+                        let addr = self.stack.pop().unwrap();
+    
+                        for i in (0..len).rev() {
+                            self.write_to_memory(element, addr.clone(), i * stride)?;
+                        }
+                        Ok(())
+                    }
                 }
                 TypeDefKind::Handle(handle) => {
                     let (Handle::Own(ty) | Handle::Borrow(ty)) = handle;
@@ -985,22 +1038,27 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Type(t) => self.lift(t),
                 TypeDefKind::List(element) => {
-                    let len = ReadI32 { value: Cell::default() };
-                    self.emit(&len)?;
-
-                    let len = match len {
-                        ReadI32 { value } => value.get(),
-                        _ => unreachable!()
-                    };
-
-                    let addr = self.stack.pop().unwrap();
-                    let stride = self.bindgen.sizes().size(element) as i32;
-
-                    for i in 0..len {
-                        self.read_from_memory(element, addr.clone(), stride * i)?;
+                    if self.bindgen.is_list_canonical(element) {
+                        self.emit(&ListCanonLift { element, ty: id })
                     }
-
-                    self.emit(&ListLift { element, ty: id, len })
+                    else {
+                        let len = ReadI32 { value: Cell::default() };
+                        self.emit(&len)?;
+    
+                        let len = match len {
+                            ReadI32 { value } => value.get(),
+                            _ => unreachable!()
+                        };
+    
+                        let addr = self.stack.pop().unwrap();
+                        let stride = self.bindgen.sizes().size(element) as i32;
+    
+                        for i in 0..len {
+                            self.read_from_memory(element, addr.clone(), stride * i)?;
+                        }
+    
+                        self.emit(&ListLift { element, ty: id, len })
+                    }
                 }
                 TypeDefKind::Handle(handle) => {
                     let (Handle::Own(ty) | Handle::Borrow(ty)) = handle;
