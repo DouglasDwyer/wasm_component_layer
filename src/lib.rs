@@ -2,16 +2,19 @@
 
 mod abi;
 mod func;
+mod identifier;
 mod types;
 mod values;
 
 use anyhow::*;
 pub use crate::func::*;
+pub use crate::identifier::*;
 pub use crate::types::*;
 pub use crate::values::*;
 use fxhash::*;
 use id_arena::*;
 use ref_cast::*;
+use std::collections::hash_map::*;
 use std::sync::*;
 use std::sync::atomic::*;
 use wasm_runtime_layer::*;
@@ -59,17 +62,24 @@ impl Component {
         let mut size_align = SizeAlign::default();
         size_align.fill(&resolve);
 
+        let export_types = ExportTypes::new((&resolve.packages[resolve.worlds[world_id].package.context("No package associated with world.")?].name).into());
+
+        let package_identifiers = Self::generate_package_identifiers(&resolve)?;
+        let interface_identifiers = Self::generate_interface_identifiers(&resolve, &package_identifiers)?;
+
         Ok(ComponentInner {
             export_mapping,
             export_names: FxHashMap::default(),
-            export_types: ExportTypes::new(),
+            import_types: ImportTypes::new(),
+            export_types,
             extracted_memories: FxHashMap::default(),
             extracted_reallocs: FxHashMap::default(),
             extracted_post_returns: FxHashMap::default(),
             imported_functions: FxHashMap::default(),
-            import_types: ImportTypes::new(),
             instance_modules: wasmtime_environ::PrimaryMap::default(),
+            interface_identifiers,
             modules,
+            package_identifiers,
             resolve,
             size_align,
             translation,
@@ -89,6 +99,27 @@ impl Component {
         }
 
         export_mapping
+    }
+
+    fn generate_package_identifiers(resolve: &Resolve) -> Result<Vec<PackageIdentifier>> {
+        let mut res = Vec::with_capacity(resolve.packages.len());
+
+        for (_, pkg) in &resolve.packages {
+            res.push(PackageIdentifier::try_from(&pkg.name)?);
+        }
+
+        Ok(res)
+    }
+
+    fn generate_interface_identifiers(resolve: &Resolve, packages: &[PackageIdentifier]) -> Result<Vec<InterfaceIdentifier>> {
+        let mut res = Vec::with_capacity(resolve.interfaces.len());
+
+        for (_, iface) in &resolve.interfaces {
+            let pkg = iface.package.context("Interface did not have associated package.")?;
+            res.push(InterfaceIdentifier::new(packages[pkg.index()].clone(), iface.name.as_deref().context("Exported interface did not have valid name.")?));
+        }
+
+        Ok(res)
     }
 
     fn generate_types(mut inner: ComponentInner) -> Result<ComponentInner> {
@@ -154,9 +185,8 @@ impl Component {
                             let iface = &inner.resolve.interfaces[*i];
                             let func = &iface.functions[&path[0]];
 
-                            let imp_name = Arc::<str>::from(&import_name[..import_name.find('@').unwrap_or(import_name.len())]);
                             ComponentImport {
-                                instance: Some(imp_name),
+                                instance: Some(inner.interface_identifiers[i.index()].clone()),
                                 name: path[0].as_str().into(),
                                 func: func.clone(),
                                 options: lowering_opts.clone()
@@ -244,12 +274,7 @@ impl Component {
                         let f = &inner.resolve.interfaces[id].functions[func_name];
     
                         let exp = ComponentExport { options: options.clone(), def: match func { CoreDef::Export(x) => x.clone(), _ => unreachable!() }, func: f.clone(), ty: crate::types::FuncType::from_resolve(f, &inner.resolve)? };
-                        if let Some(inst) = inner.export_types.instances.get_mut(export_name.as_str()) {
-                            ensure!(inst.functions.insert(func_name.as_str().into(), exp).is_none(), "Duplicate function definition.");
-                        }
-                        else {
-                            ensure!(inner.export_types.instances.entry(export_name.as_str().into()).or_insert(ExportTypesInstance::new()).functions.insert(func_name.as_str().into(), exp).is_none(), "Duplicate function definition.");
-                        }
+                        ensure!(inner.export_types.instances.entry(inner.interface_identifiers[id.index()].clone()).or_insert_with(ExportTypesInstance::new).functions.insert(func_name.as_str().into(), exp).is_none(), "Duplicate function definition.");
                     }
                 }
 
@@ -311,7 +336,9 @@ struct ComponentInner {
     pub imported_functions: FxHashMap<TrampolineIndex, ComponentImport>,
     pub import_types: ImportTypes,
     pub instance_modules: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, StaticModuleIndex>,
+    pub interface_identifiers: Vec<InterfaceIdentifier>,
     pub modules: FxHashMap<StaticModuleIndex, ModuleTranslation>,
+    pub package_identifiers: Vec<PackageIdentifier>,
     pub resolve: Resolve,
     pub size_align: SizeAlign,
     pub translation: ComponentTranslation,
@@ -333,24 +360,29 @@ struct ModuleTranslation {
 #[derive(Debug)]
 pub struct ExportTypes {
     root: ExportTypesInstance,
-    instances: FxHashMap<Arc<str>, ExportTypesInstance>
+    instances: FxHashMap<InterfaceIdentifier, ExportTypesInstance>,
+    package: PackageIdentifier
 }
 
 impl ExportTypes {
-    pub(crate) fn new() -> Self {
-        Self { root: ExportTypesInstance::new(), instances: FxHashMap::default() }
+    pub(crate) fn new(package: PackageIdentifier) -> Self {
+        Self { root: ExportTypesInstance::new(), instances: FxHashMap::default(), package }
     }
 
     pub fn root(&self) -> &ExportTypesInstance {
         &self.root
     }
 
-    pub fn instance(&self, name: impl AsRef<str>) -> Option<&ExportTypesInstance> {
-        self.instances.get(name.as_ref())
+    pub fn package(&self) -> &PackageIdentifier {
+        &self.package
     }
 
-    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a str, &'a ExportTypesInstance)> {
-        self.instances.iter().map(|(k, v)| (&**k, v))
+    pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ExportTypesInstance> {
+        self.instances.get(name)
+    }
+
+    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportTypesInstance)> {
+        self.instances.iter()
     }
 }
 
@@ -376,7 +408,7 @@ impl ExportTypesInstance {
 #[derive(Debug)]
 pub struct ImportTypes {
     root: ImportTypesInstance,
-    instances: FxHashMap<Arc<str>, ImportTypesInstance>
+    instances: FxHashMap<InterfaceIdentifier, ImportTypesInstance>
 }
 
 impl ImportTypes {
@@ -388,12 +420,12 @@ impl ImportTypes {
         &self.root
     }
 
-    pub fn instance(&self, name: impl AsRef<str>) -> Option<&ImportTypesInstance> {
-        self.instances.get(name.as_ref())
+    pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ImportTypesInstance> {
+        self.instances.get(name)
     }
 
-    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a str, &'a ImportTypesInstance)> {
-        self.instances.iter().map(|(k, v)| (&**k, v))
+    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ImportTypesInstance)> {
+        self.instances.iter()
     }
 }
 
@@ -419,7 +451,7 @@ impl ImportTypesInstance {
 #[derive(Clone, Debug, Default)]
 pub struct Linker {
     root: LinkerInstance,
-    instances: FxHashMap<Arc<str>, LinkerInstance>
+    instances: FxHashMap<InterfaceIdentifier, LinkerInstance>
 }
 
 impl Linker {
@@ -431,22 +463,21 @@ impl Linker {
         &mut self.root
     }
 
-    pub fn define_instance(&mut self, name: impl Into<Arc<str>>) -> Result<&mut LinkerInstance> {
-        let n = Into::<Arc<str>>::into(name);
-        if self.instance(&n).is_none() {
-            Ok(self.instances.entry(n).or_default())
+    pub fn define_instance(&mut self, name: InterfaceIdentifier) -> Result<&mut LinkerInstance> {
+        if self.instance(&name).is_none() {
+            Ok(self.instances.entry(name).or_default())
         }
         else {
             bail!("Duplicate instance definition.");
         }
     }
 
-    pub fn instance(&self, name: impl AsRef<str>) -> Option<&LinkerInstance> {
-        self.instances.get(name.as_ref())
+    pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&LinkerInstance> {
+        self.instances.get(name)
     }
 
-    pub fn instance_mut(&mut self, name: impl AsRef<str>) -> Option<&mut LinkerInstance> {
-        self.instances.get_mut(name.as_ref())
+    pub fn instance_mut(&mut self, name: &InterfaceIdentifier) -> Option<&mut LinkerInstance> {
+        self.instances.get_mut(name)
     }
 
     pub fn instantiate(&self, ctx: impl AsContextMut, component: &Component) -> Result<Instance> {
@@ -485,21 +516,36 @@ impl Instance {
             instance_flags.push(Global::new(ctx.as_context_mut().inner, wasm_runtime_layer::Value::I32(wasmtime_environ::component::FLAG_MAY_LEAVE | wasmtime_environ::component::FLAG_MAY_ENTER), true));
         }
 
-        let instance = InstanceInner { component: component.0.clone(), instances: Default::default(), instance_flags, funcs: FxHashMap::default() };
+        let instance = InstanceInner { component: component.0.clone(), exports: Exports::new(component.exports().package().clone()), instances: Default::default(), instance_flags };
         let initialized = Self::global_initialize(instance, &mut ctx, linker)?;
         let exported = Self::load_exports(initialized, &ctx)?;
         Ok(Self(Arc::new(exported)))
     }
 
+    pub fn component(&self) -> Component {
+        Component(self.0.component.clone())
+    }
+
+    pub fn exports(&self) -> &Exports {
+        &self.0.exports
+    }
+
     fn load_exports(mut inner: InstanceInner, ctx: impl AsContext) -> Result<InstanceInner> {
         for (name, func) in &inner.component.export_types.root.functions {
-            inner.funcs.insert(("".to_string(), name.to_string()), Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, func.ty.clone())?);
+            inner.exports.root.functions.insert(name.clone(), Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, func.ty.clone())?);
         }
         
+        let mut generated_functions = Vec::new();
         for (inst_name, inst) in &inner.component.export_types.instances {
             for (name, func) in &inst.functions {
-                inner.funcs.insert((inst_name.to_string(), name.to_string()), Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, func.ty.clone())?);
+                let export = Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, func.ty.clone())?;
+                generated_functions.push((inst_name.clone(), name.clone(), export));
             }
+        }
+
+        for (inst_name, name, func) in generated_functions {
+            let interface = inner.exports.instances.entry(inst_name).or_insert_with(ExportInstance::new);
+            interface.functions.insert(name, func);
         }
 
         Ok(inner)
@@ -612,7 +658,7 @@ impl Instance {
 
     fn get_component_import(import: &ComponentImport, linker: &Linker) -> Result<crate::func::Func> {
         let inst = if let Some(name) = &import.instance {
-            linker.instance(name).ok_or_else(|| Error::msg(format!("Could not find imported interface {name}")))?
+            linker.instance(name).ok_or_else(|| Error::msg(format!("Could not find imported interface {name:?}")))?
         }
         else {
             linker.root()
@@ -623,16 +669,64 @@ impl Instance {
 }
 
 #[derive(Debug)]
+pub struct Exports {
+    root: ExportInstance,
+    instances: FxHashMap<InterfaceIdentifier, ExportInstance>,
+    package: PackageIdentifier
+}
+
+impl Exports {
+    pub(crate) fn new(package: PackageIdentifier) -> Self {
+        Self { root: ExportInstance::new(), instances: FxHashMap::default(), package }
+    }
+
+    pub fn root(&self) -> &ExportInstance {
+        &self.root
+    }
+
+    pub fn package(&self) -> &PackageIdentifier {
+        &self.package
+    }
+
+    pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ExportInstance> {
+        self.instances.get(name)
+    }
+
+    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportInstance)> {
+        self.instances.iter()
+    }
+}
+
+#[derive(Debug)]
+pub struct ExportInstance {
+    functions: FxHashMap<Arc<str>, crate::func::Func>
+}
+
+impl ExportInstance {
+    pub(crate) fn new() -> Self {
+        Self { functions: FxHashMap::default() }
+    }
+
+    pub fn func(&self, name: impl AsRef<str>) -> Option<crate::func::Func> {
+        self.functions.get(name.as_ref()).cloned()
+    }
+
+    pub fn funcs<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::func::Func)> {
+        self.functions.iter().map(|(k, v)| (&**k, v.clone()))
+    }
+}
+
+#[derive(Debug)]
 struct InstanceInner {
     pub component: Arc<ComponentInner>,
+    pub exports: Exports,
     pub instance_flags: wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>,
-    pub instances: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, wasm_runtime_layer::Instance>,
-    pub funcs: FxHashMap<(String, String), crate::func::Func>,
+    pub instances: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, wasm_runtime_layer::Instance>
 }
 
 #[derive(Clone, Debug)]
 struct ComponentImport {
-    pub instance: Option<Arc<str>>,
+    pub instance: Option<InterfaceIdentifier>,
     pub name: Arc<str>,
     pub func: Function,
     pub options: CanonicalOptions
@@ -865,12 +959,13 @@ mod tests {
 
         let inst_0 = linker.instantiate(&mut store, &comp_0).unwrap();
 
-        let func_ty = comp.imports().instance("test:guest/tester").unwrap().func("get-a-string").unwrap();
+        println!("COmp 0 had version {:?} and comp wanted {:?}", comp_0.exports().instances().map(|(a, _)| a).collect::<Vec<_>>(), comp.imports().instances().map(|(a, _)| a).collect::<Vec<_>>());
+        let func_ty = comp.imports().instance(&"test:guest/tester@0.1.1".try_into().unwrap()).unwrap().func("get-a-string").unwrap();
 
-        linker.define_instance("test:guest/tester").unwrap().define_func("get-a-string", inst_0.0.funcs.get(&("test:guest/tester".to_string(), "get-a-string".to_string())).unwrap().clone()).unwrap();
+        linker.define_instance("test:guest/tester@0.1.1".try_into().unwrap()).unwrap().define_func("get-a-string", inst_0.exports().instance(&"test:guest/tester@0.1.1".try_into().unwrap()).unwrap().func("get-a-string").unwrap()).unwrap();
 
         let inst = linker.instantiate(&mut store, &comp).unwrap();
-        let double = inst.0.funcs.get(&("".to_string(), "doubled-string".to_string())).unwrap();
+        let double = inst.exports().root().func("doubled-string").unwrap();
 
         let mut res = [crate::values::Value::Bool(false)];
         double.call(&mut store, &[], &mut res).unwrap();
