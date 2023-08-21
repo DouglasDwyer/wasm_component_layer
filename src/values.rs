@@ -1,7 +1,11 @@
 use anyhow::*;
+use crate::{AsContext, AsContextMut};
 use crate::types::*;
+use std::marker::*;
+use std::mem::*;
 use std::ops::*;
 use std::sync::*;
+use std::sync::atomic::*;
 use private::*;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,7 +32,8 @@ pub enum Value {
     Option(OptionValue),
     Result(ResultValue),
     Flags(Flags),
-    /*Resource(()),*/
+    Own(ResourceOwn),
+    Borrow(ResourceBorrow)
 }
 
 impl Value {
@@ -56,6 +61,8 @@ impl Value {
             Value::Option(x) => ValueType::Option(x.ty()),
             Value::Result(x) => ValueType::Result(x.ty()),
             Value::Flags(x) => ValueType::Flags(x.ty()),
+            Value::Own(x) => ValueType::Own(x.ty()),
+            Value::Borrow(x) => ValueType::Borrow(x.ty())
         }
     }
 }
@@ -115,7 +122,7 @@ macro_rules! impl_primitive_from {
 
 impl_primitive_from!((bool, Bool) (i8, S8) (u8, U8) (i16, S16) (u16, U16) (i32, S32) (u32, U32) (i64, S64) (u64, U64) (f32, F32) (f64, F64) (char, Char));
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct List {
     values: ListSpecialization,
     ty: ListType
@@ -178,6 +185,12 @@ impl List {
     }
 }
 
+impl PartialEq for List {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+    }
+}
+
 impl<'a> IntoIterator for &'a List {
     type IntoIter = ListSpecializationIter<'a>;
 
@@ -200,7 +213,7 @@ impl<T: ListPrimitive> From<Arc<[T]>> for List {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Record {
     fields: Arc<[(Arc<str>, Value)]>,
     ty: RecordType
@@ -240,7 +253,13 @@ impl Record {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl PartialEq for Record {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Tuple {
     fields: Arc<[Value]>,
     ty: TupleType
@@ -272,6 +291,12 @@ impl Tuple {
             fields: fields.into_iter().collect(),
             ty
         }
+    }
+}
+
+impl PartialEq for Tuple {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields
     }
 }
 
@@ -511,6 +536,133 @@ impl Flags {
 pub(crate) enum FlagsList {
     Single(u32),
     Multiple(Arc<Vec<u32>>)
+}
+
+pub trait ComponentType where Self: TryFrom<Value>, Value: TryFrom<Self> {
+    fn ty() -> ValueType;
+}
+
+#[derive(Clone, Debug)]
+pub struct ResourceOwn {
+    tracker: Arc<AtomicUsize>,
+    rep: i32,
+    destructor: Option<wasm_runtime_layer::Func>,
+    ty: ResourceType
+}
+
+impl ResourceOwn {
+    pub fn new(rep: i32, ty: ResourceType) -> Result<Self> {
+        Ok(Self {
+            tracker: Arc::default(),
+            rep,
+            destructor: None,
+            ty
+        })
+    }
+
+    pub(crate) fn new_guest(rep: i32, ty: ResourceType, destructor: Option<wasm_runtime_layer::Func>) -> Self {
+        Self {
+            tracker: Arc::default(),
+            rep,
+            destructor,
+            ty
+        }
+    }
+
+    pub fn borrow(&self, ctx: impl crate::AsContextMut) -> Result<ResourceBorrow> {
+        ensure!(self.ty.store_id() == ctx.as_context().inner.data().id, "Incorrect store.");
+        ensure!(self.tracker.load(Ordering::Acquire) < usize::MAX, "Resource was already destroyed.");
+        Ok(ResourceBorrow { dead: Arc::default(), host_tracker: Some(self.tracker.clone()), rep: self.rep, ty: self.ty.clone() })
+    }
+
+    pub fn rep(&self, ctx: impl AsContext) -> Result<i32> {
+        ensure!(self.ty.store_id() == ctx.as_context().inner.data().id, "Incorrect store.");
+        Ok(self.rep)
+    }
+
+    pub fn ty(&self) -> ResourceType {
+        self.ty.clone()
+    }
+
+    pub fn drop(&self, mut ctx: impl crate::AsContextMut) -> Result<()> {
+        ensure!(self.ty.store_id() == ctx.as_context().inner.data().id, "Incorrect store.");
+        ensure!(self.tracker.load(Ordering::Acquire) == 0, "Resource had remaining borrows or was already dropped.");
+        
+        if let Some(destructor) = &self.destructor {
+            destructor.call(ctx.as_context_mut().inner, &[wasm_runtime_layer::Value::I32(self.rep)], &mut [])?;
+        }
+        else if let Some(Some(destructor)) = self.ty.host_destructor() {
+            destructor.call(ctx, &[crate::values::Value::S32(self.rep)], &mut [])?;
+        }
+
+        self.tracker.store(usize::MAX, Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn lower(&self, ctx: impl crate::AsContextMut) -> Result<i32> {
+        ensure!(self.ty.store_id() == ctx.as_context().inner.data().id, "Incorrect store.");
+        ensure!(self.tracker.load(Ordering::Acquire) < usize::MAX, "Resource was already destroyed.");
+        self.tracker.store(usize::MAX, Ordering::Release);
+        Ok(self.rep)
+    }
+}
+
+impl PartialEq for ResourceOwn {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tracker, &other.tracker)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ResourceBorrow {
+    dead: Arc<AtomicBool>,
+    host_tracker: Option<Arc<AtomicUsize>>,
+    rep: i32,
+    ty: ResourceType
+}
+
+impl ResourceBorrow {
+    pub(crate) fn new(rep: i32, ty: ResourceType) -> Self {
+        Self {
+            dead: Arc::default(),
+            host_tracker: None,
+            rep,
+            ty
+        }
+    }
+
+    pub fn rep(&self, ctx: impl AsContext) -> Result<i32> {
+        ensure!(self.ty.store_id() == ctx.as_context().inner.data().id, "Incorrect store.");
+        Ok(self.rep)
+    }
+
+    pub fn ty(&self) -> ResourceType {
+        self.ty.clone()
+    }
+
+    pub fn drop(&self, ctx: impl crate::AsContextMut) -> Result<()> {
+        ensure!(self.ty.store_id() == ctx.as_context().inner.data().id, "Incorrect store.");
+        ensure!(!self.dead.load(Ordering::Acquire), "Borrow was already dropped.");
+        let tracker = self.host_tracker.as_ref().context("Only host borrows require dropping.")?;
+        tracker.fetch_sub(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    pub(crate) fn lower(&self, ctx: impl crate::AsContextMut) -> Result<i32> {
+        ensure!(self.ty.store_id() == ctx.as_context().inner.data().id, "Incorrect store.");
+        ensure!(!self.dead.load(Ordering::Acquire), "Borrow was already dropped.");
+        Ok(self.rep)
+    }
+
+    pub(crate) fn dead_ref(&self) -> Arc<AtomicBool> {
+        self.dead.clone()
+    }
+}
+
+impl PartialEq for ResourceBorrow {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.dead, &other.dead)
+    }
 }
 
 mod private {

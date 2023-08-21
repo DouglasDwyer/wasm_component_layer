@@ -28,6 +28,9 @@ pub(crate) struct GuestFunc {
     pub memory: Option<Memory>,
     pub realloc: Option<wasm_runtime_layer::Func>,
     pub post_return: Option<wasm_runtime_layer::Func>,
+    pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    pub types: Arc<[crate::types::ValueType]>,
+    pub instance_id: u64
 }
 
 #[derive(Clone, Debug)]
@@ -63,7 +66,7 @@ impl Func {
 
         match &self.backing {
             FuncImpl::GuestFunc(x) => {
-                let GuestFunc { callee, component, encoding, function, memory, realloc, post_return } = &**x;
+                let GuestFunc { callee, component, encoding, function, memory, realloc, resource_tables, post_return, types, instance_id } = &**x;
 
                 let mut bindgen = FuncBindgen {
                     ctx,
@@ -76,7 +79,12 @@ impl Func {
                     encoding,
                     memory,
                     realloc,
+                    resource_tables: &resource_tables,
                     post_return,
+                    types: &types,
+                    handles_to_drop: Vec::new(),
+                    required_dropped: Vec::new(),
+                    instance_id: *instance_id
                 };
         
                 Generator::new(&component.resolve, AbiVariant::GuestExport, LiftLower::LowerArgsLiftResults, &mut bindgen).call(function)
@@ -109,7 +117,12 @@ impl Func {
             encoding: &options.encoding,
             memory: &options.memory,
             realloc: &options.realloc,
+            resource_tables: &options.resource_tables,
             post_return: &options.post_return,
+            types: &options.types,
+            handles_to_drop: Vec::new(),
+            required_dropped: Vec::new(),
+            instance_id: options.instance_id
         };
 
         Generator::new(&options.component.resolve, AbiVariant::GuestImport, LiftLower::LiftArgsLowerResults, &mut bindgen).call(&options.function)?;
@@ -128,16 +141,10 @@ pub(crate) struct GuestInvokeOptions {
     pub function: Function,
     pub memory: Option<Memory>,
     pub realloc: Option<wasm_runtime_layer::Func>,
-    pub post_return: Option<wasm_runtime_layer::Func>
-}
-
-macro_rules! require_matches {
-    ($expression:expr, $pattern:pat $(if $guard:expr)?, $then: expr) => {
-        match $expression {
-            $pattern $(if $guard)? => $then,
-            _ => bail!("Incorrect type.")
-        }
-    };
+    pub post_return: Option<wasm_runtime_layer::Func>,
+    pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    pub types: Arc<[crate::types::ValueType]>,
+    pub instance_id: u64
 }
 
 #[derive(Clone, Debug)]
@@ -165,7 +172,12 @@ struct FuncBindgen<'a, C: AsContextMut> {
     pub realloc: &'a Option<wasm_runtime_layer::Func>,
     pub post_return: &'a Option<wasm_runtime_layer::Func>,
     pub arguments: &'a [Value],
-    pub results: &'a mut [Value]
+    pub results: &'a mut [Value],
+    pub resource_tables: &'a Mutex<Vec<HandleTable>>,
+    pub types: &'a [crate::types::ValueType],
+    pub handles_to_drop: Vec<(u32, i32)>,
+    pub required_dropped: Vec<(bool, u32, i32, Arc<AtomicBool>)>,
+    pub instance_id: u64
 }
 
 impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
@@ -367,12 +379,12 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }));
             }
             Instruction::ListLift { element, ty, len } => {
-                let ty = self.component.types[ty.index()].clone();
+                let ty = self.types[ty.index()].clone();
                 results.push(Value::List(List::new(require_matches!(ty, crate::types::ValueType::List(x), x), operands.drain(..))?));
             },
             Instruction::ReadI32 { value } => value.set(require_matches!(operands.pop(), Some(Value::S32(x)), x)),
             Instruction::RecordLower { record, name, ty } => {
-                let official_ty = require_matches!(&self.component.types[ty.index()], ValueType::Record(x), x);
+                let official_ty = require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
                 let record = require_matches!(operands.pop(), Some(Value::Record(x)), x);
                 ensure!(&record.ty() == official_ty, "Record types did not match.");
                 
@@ -385,20 +397,79 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::RecordLift { record, name, ty } => {
-                let official_ty = require_matches!(&self.component.types[ty.index()], ValueType::Record(x), x);
+                let official_ty = require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
                 ensure!(operands.len() == official_ty.fields().len(), "Record types did not match.");
 
                 results.push(Value::Record(crate::values::Record::from_sorted(official_ty.clone(), official_ty.fields.iter().map(|(i, name, _)| (name.clone(), replace(&mut operands[*i], Value::Bool(false)))))));
                 operands.clear();
             },
-            Instruction::HandleLower { handle, name, ty } => bail!("Not yet implemented."),
-            Instruction::HandleLift { handle, name, ty } => bail!("Not yet implemented."),
+            Instruction::HandleLower { handle, name, ty: def } => match &self.types[def.index()] {
+                ValueType::Own(ty) => {
+                    let val = require_matches!(operands.pop(), Some(Value::Own(x)), x);
+                    let rep = val.lower(&mut self.ctx)?;
+
+                    let mut tables = self.resource_tables.try_lock().expect("Could not acquire table access.");
+                    results.push(Value::S32(tables[self.component.resource_map[def.index()].as_u32() as usize].add(HandleElement { rep, own: true, lend_count: 0 })));
+                },
+                ValueType::Borrow(ty) => {
+                    let val = require_matches!(operands.pop(), Some(Value::Borrow(x)), x);
+                    let rep = val.lower(&mut self.ctx)?;
+
+                    if val.ty().is_owned_by_instance(self.instance_id) {
+                        results.push(Value::S32(rep));
+                    }
+                    else {
+                        let mut tables = self.resource_tables.try_lock().expect("Could not acquire table access.");
+                        let res = self.component.resource_map[def.index()].as_u32();
+                        let idx = tables[res as usize].add(HandleElement { rep, own: false, lend_count: 0 });
+                        results.push(Value::S32(idx));
+                        self.handles_to_drop.push((res, idx));
+                    }
+                },
+                _ => unreachable!()
+            },
+            Instruction::HandleLift { handle, name, ty: def } => match &self.types[def.index()] {
+                ValueType::Own(ty) => {
+                    let val = require_matches!(operands.pop(), Some(Value::S32(x)), x);
+                    
+                    let mut tables = self.resource_tables.try_lock().expect("Could not acquire table access.");
+                    let table = &mut tables[self.component.resource_map[def.index()].as_u32() as usize];
+                    let elem = table.remove(val)?;
+                    ensure!(elem.lend_count == 0, "Attempted to transfer ownership while handle was lent.");
+                    ensure!(elem.own, "Attempted to transfer ownership of non-owned handle.");
+
+                    if ty.host_destructor().is_some() {
+                        results.push(Value::Own(ResourceOwn::new(elem.rep, ty.clone())?));
+                    }
+                    else {
+                        results.push(Value::Own(ResourceOwn::new_guest(elem.rep, ty.clone(), table.destructor().cloned())));
+                    }
+                },
+                ValueType::Borrow(ty) => {
+                    let val = require_matches!(operands.pop(), Some(Value::S32(x)), x);
+                    
+                    let mut tables = self.resource_tables.try_lock().expect("Could not acquire table access.");
+                    let res = self.component.resource_map[def.index()].as_u32();
+                    let table = &mut tables[res as usize];
+                    let mut elem = *table.get(val)?;
+                    
+                    if elem.own {
+                        elem.lend_count += 1;
+                        table.set(val, elem);
+                    }
+
+                    let borrow = ResourceBorrow::new(elem.rep, ty.clone());
+                    self.required_dropped.push((elem.own, res, val, borrow.dead_ref()));
+                    results.push(Value::Borrow(borrow));
+                },
+                _ => unreachable!()
+            },
             Instruction::TupleLower { tuple, ty } => {
                 let tuple = require_matches!(operands.pop(), Some(Value::Tuple(x)), x);
                 results.extend(tuple.iter().cloned());
             },
             Instruction::TupleLift { tuple, ty } => {
-                results.push(Value::Tuple(crate::values::Tuple::new_unchecked(require_matches!(&self.component.types[ty.index()], ValueType::Tuple(x), x.clone()), operands.drain(..))));
+                results.push(Value::Tuple(crate::values::Tuple::new_unchecked(require_matches!(&self.types[ty.index()], ValueType::Tuple(x), x.clone()), operands.drain(..))));
             },
             Instruction::FlagsLower { flags, name, ty } => {
                 let flags = require_matches!(operands.pop(), Some(Value::Flags(x)), x);
@@ -407,7 +478,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::FlagsLift { flags, name, ty } => {
-                let flags = require_matches!(&self.component.types[ty.index()], ValueType::Flags(x), x);
+                let flags = require_matches!(&self.types[ty.index()], ValueType::Flags(x), x);
 
                 let list = match operands.len() {
                     0 => FlagsList::Single(0),
@@ -436,11 +507,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             },
             Instruction::VariantLift { variant, name, ty, discriminant, .. } => {
-                let variant_ty = require_matches!(&self.component.types[ty.index()], ValueType::Variant(x), x);
+                let variant_ty = require_matches!(&self.types[ty.index()], ValueType::Variant(x), x);
                 results.push(Value::Variant(crate::values::Variant::new(variant_ty.clone(), *discriminant as usize, operands.pop())?));
             },
             Instruction::UnionLift { union, name, ty, discriminant } => {
-                let union_ty = require_matches!(&self.component.types[ty.index()], ValueType::Union(x), x);
+                let union_ty = require_matches!(&self.types[ty.index()], ValueType::Union(x), x);
                 let value = require_matches!(operands.pop(), Some(x), x);
                 results.push(Value::Union(crate::values::Union::new(union_ty.clone(), *discriminant as usize, value)?));
             },
@@ -449,15 +520,15 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 results.push(Value::S32(en.discriminant() as i32));
             },
             Instruction::EnumLift { enum_, name, ty, discriminant } => {
-                let enum_ty = require_matches!(&self.component.types[ty.index()], ValueType::Enum(x), x);
+                let enum_ty = require_matches!(&self.types[ty.index()], ValueType::Enum(x), x);
                 results.push(Value::Enum(crate::values::Enum::new(enum_ty.clone(), *discriminant as usize)?));
             },
             Instruction::OptionLift { payload, ty, discriminant, .. } => {
-                let option_ty = require_matches!(&self.component.types[ty.index()], ValueType::Option(x), x);
+                let option_ty = require_matches!(&self.types[ty.index()], ValueType::Option(x), x);
                 results.push(Value::Option(OptionValue::new(option_ty.clone(), if *discriminant == 0 { None } else { Some(require_matches!(operands.pop(), Some(x), x)) })?));
             },
             Instruction::ResultLift { result, discriminant, ty, .. } => {
-                let result_ty = require_matches!(&self.component.types[ty.index()], ValueType::Result(x), x);
+                let result_ty = require_matches!(&self.types[ty.index()], ValueType::Result(x), x);
                 results.push(Value::Result(ResultValue::new(result_ty.clone(), if *discriminant == 0 { std::result::Result::Ok(operands.pop()) } else { std::result::Result::Err(operands.pop()) })?));
             },
             Instruction::CallWasm { name, sig } => {
@@ -476,6 +547,23 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             Instruction::Return { amt, func } => {
                 if let Some(post) = &self.post_return {
                     post.call(&mut self.ctx.as_context_mut().inner, &self.flat_results, &mut [])?;
+                }
+
+                let mut tables = self.resource_tables.try_lock().expect("Could not lock resource table.");
+                for (res, idx) in &self.handles_to_drop {
+                    tables[*res as usize].remove(*idx);
+                }
+
+                for (own, res, idx, ptr) in &self.required_dropped {
+                    if *own {
+                        let table = &mut tables[*res as usize];
+                        let mut elem = *table.get(*idx)?;
+                        
+                        elem.lend_count -= 1;
+                        table.set(*idx, elem);
+                    }
+
+                    ensure!(Arc::strong_count(ptr) == 1, "Borrow was not dropped at the end of method.");
                 }
 
                 for (i, val) in operands.drain(..).enumerate() {

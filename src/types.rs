@@ -1,7 +1,10 @@
 use anyhow::*;
+use crate::{AsContext, ComponentInner};
 use fxhash::*;
+use id_arena::*;
 use std::hash::*;
 use std::sync::*;
+use std::sync::atomic::*;
 
 /// Represents a component model interface type
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -28,12 +31,12 @@ pub enum ValueType {
     Option(OptionType),
     Result(ResultType),
     Flags(FlagsType),
-    /*Own(()),
-    Borrow(()),*/
+    Own(ResourceType),
+    Borrow(ResourceType),
 }
 
 impl ValueType {
-    pub(crate) fn from_resolve(ty: &wit_parser::Type, resolve: &wit_parser::Resolve) -> Result<Self> {
+    pub(crate) fn from_component(ty: &wit_parser::Type, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
         Ok(match ty {
             wit_parser::Type::Bool => Self::Bool,
             wit_parser::Type::U8 => Self::U8,
@@ -48,26 +51,29 @@ impl ValueType {
             wit_parser::Type::Float64 => Self::F64,
             wit_parser::Type::Char => Self::Char,
             wit_parser::Type::String => Self::String,
-            wit_parser::Type::Id(x) => Self::from_typedef(&resolve.types[*x], resolve)?,
+            wit_parser::Type::Id(x) => Self::from_component_typedef(*x, component, resource_map)?,
         })
     }
 
-    pub(crate) fn from_typedef(def: &wit_parser::TypeDef, resolve: &wit_parser::Resolve) -> Result<Self> {
-        Ok(match &def.kind {
-            wit_parser::TypeDefKind::Record(x) => Self::Record(RecordType::from_resolve(x, resolve)?),
-            wit_parser::TypeDefKind::Resource => bail!("Unimplemented"),
-            wit_parser::TypeDefKind::Handle(_) => bail!("Unimplemented"),
-            wit_parser::TypeDefKind::Flags(x) => Self::Flags(FlagsType::from_resolve(x, resolve)?),
-            wit_parser::TypeDefKind::Tuple(x) => Self::Tuple(TupleType::from_resolve(x, resolve)?),
-            wit_parser::TypeDefKind::Variant(x) => Self::Variant(VariantType::from_resolve(x, resolve)?),
-            wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_resolve(x, resolve)),
-            wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(Self::from_resolve(x, resolve)?)),
-            wit_parser::TypeDefKind::Result(x) => Self::Result(ResultType::new(match &x.ok { Some(t) => Some(Self::from_resolve(t, resolve)?), None => None }, match &x.err { Some(t) => Some(Self::from_resolve(t, resolve)?), None => None })),
-            wit_parser::TypeDefKind::Union(x) => Self::Union(UnionType::from_resolve(x, resolve)?),
-            wit_parser::TypeDefKind::List(x) => Self::List(ListType::new(Self::from_resolve(x, resolve)?)),
+    pub(crate) fn from_component_typedef(def: Id<wit_parser::TypeDef>, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+        Ok(match &component.resolve.types[def].kind {
+            wit_parser::TypeDefKind::Record(x) => Self::Record(RecordType::from_component(x, component, resource_map)?),
+            wit_parser::TypeDefKind::Resource => bail!("Cannot instantiate resource as type."),
+            wit_parser::TypeDefKind::Handle(x) => match x {
+                wit_parser::Handle::Own(t) => Self::Own(ResourceType::from_resolve(*t, component, resource_map)?),
+                wit_parser::Handle::Borrow(t) => Self::Borrow(ResourceType::from_resolve(*t, component, resource_map)?)
+            },
+            wit_parser::TypeDefKind::Flags(x) => Self::Flags(FlagsType::from_component(x, component)?),
+            wit_parser::TypeDefKind::Tuple(x) => Self::Tuple(TupleType::from_component(x, component, resource_map)?),
+            wit_parser::TypeDefKind::Variant(x) => Self::Variant(VariantType::from_component(x, component, resource_map)?),
+            wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_component(x, component)),
+            wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(Self::from_component(x, component, resource_map)?)),
+            wit_parser::TypeDefKind::Result(x) => Self::Result(ResultType::new(match &x.ok { Some(t) => Some(Self::from_component(t, component, resource_map)?), None => None }, match &x.err { Some(t) => Some(Self::from_component(t, component, resource_map)?), None => None })),
+            wit_parser::TypeDefKind::Union(x) => Self::Union(UnionType::from_component(x, component, resource_map)?),
+            wit_parser::TypeDefKind::List(x) => Self::List(ListType::new(Self::from_component(x, component, resource_map)?)),
             wit_parser::TypeDefKind::Future(_) => bail!("Unimplemented."),
             wit_parser::TypeDefKind::Stream(_) => bail!("Unimplemented."),
-            wit_parser::TypeDefKind::Type(x) => Self::from_resolve(x, resolve)?,
+            wit_parser::TypeDefKind::Type(x) => Self::from_component(x, component, resource_map)?,
             wit_parser::TypeDefKind::Unknown => unreachable!(),
         })
     }
@@ -119,8 +125,8 @@ impl RecordType {
         Ok(result)
     }
 
-    fn from_resolve(ty: &wit_parser::Record, resolve: &wit_parser::Resolve) -> Result<Self> {
-        let mut to_sort = ty.fields.iter().enumerate().map(|(i, x)| Ok((i, Into::<Arc<str>>::into(x.name.as_str()), ValueType::from_resolve(&x.ty, resolve)?))).collect::<Result<Arc<_>>>()?;
+    fn from_component(ty: &wit_parser::Record, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+        let mut to_sort = ty.fields.iter().enumerate().map(|(i, x)| Ok((i, Into::<Arc<str>>::into(x.name.as_str()), ValueType::from_component(&x.ty, component, resource_map)?))).collect::<Result<Arc<_>>>()?;
         Arc::get_mut(&mut to_sort).expect("Could not get exclusive reference.").sort_by(|a, b| a.1.cmp(&b.1));
 
         for pair in to_sort.windows(2) {
@@ -145,8 +151,8 @@ impl TupleType {
         &self.fields
     }
 
-    fn from_resolve(ty: &wit_parser::Tuple, resolve: &wit_parser::Resolve) -> Result<Self> {
-        let fields = ty.types.iter().map(|x| ValueType::from_resolve(x, resolve)).collect::<Result<_>>()?;
+    fn from_component(ty: &wit_parser::Tuple, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+        let fields = ty.types.iter().map(|x| ValueType::from_component(x, component, resource_map)).collect::<Result<_>>()?;
         Ok(Self { fields })
     }
 }
@@ -189,8 +195,8 @@ impl VariantType {
         &self.cases
     }
 
-    fn from_resolve(ty: &wit_parser::Variant, resolve: &wit_parser::Resolve) -> Result<Self> {
-        let cases: Arc<_> = ty.cases.iter().map(|x| Ok(VariantCase { name: x.name.as_str().into(), ty: match &x.ty { Some(t) => Some(ValueType::from_resolve(t, resolve)?), None => None } })).collect::<Result<_>>()?;
+    fn from_component(ty: &wit_parser::Variant, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+        let cases: Arc<_> = ty.cases.iter().map(|x| Ok(VariantCase { name: x.name.as_str().into(), ty: match &x.ty { Some(t) => Some(ValueType::from_component(t, component, resource_map)?), None => None } })).collect::<Result<_>>()?;
 
         for i in 0..cases.len() {
             for j in 0..i {
@@ -216,7 +222,7 @@ impl EnumType {
         self.cases.iter().map(|x| &**x)
     }
 
-    fn from_resolve(ty: &wit_parser::Enum, resolve: &wit_parser::Resolve) -> Self {
+    fn from_component(ty: &wit_parser::Enum, component: &ComponentInner) -> Self {
         Self::new(ty.cases.iter().map(|x| x.name.as_str()))
     }
 }
@@ -235,8 +241,8 @@ impl UnionType {
         &self.cases
     }
 
-    fn from_resolve(ty: &wit_parser::Union, resolve: &wit_parser::Resolve) -> Result<Self> {
-        let cases = ty.cases.iter().map(|x| ValueType::from_resolve(&x.ty, resolve)).collect::<Result<_>>()?;
+    fn from_component(ty: &wit_parser::Union, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+        let cases = ty.cases.iter().map(|x| ValueType::from_component(&x.ty, component, resource_map)).collect::<Result<_>>()?;
 
         Ok(Self { cases })
     }
@@ -301,7 +307,7 @@ impl FlagsType {
         self.names.iter().map(|x| &**x)
     }
 
-    fn from_resolve(ty: &wit_parser::Flags, resolve: &wit_parser::Resolve) -> Result<Self> {
+    fn from_component(ty: &wit_parser::Flags, component: &ComponentInner) -> Result<Self> {
         Self::new(ty.flags.iter().map(|x| x.name.as_ref()))
     }
 }
@@ -309,6 +315,107 @@ impl FlagsType {
 impl Hash for FlagsType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.names.hash(state)
+    }
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct ResourceType {
+    kind: ResourceKindValue
+}
+
+impl ResourceType {
+    pub fn new<C: crate::AsContext>(ctx: C, destructor: Option<crate::func::Func>) -> Result<Self> {
+        static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let store_id = ctx.as_context().inner.data().id;
+        if let Some(destructor) = &destructor {
+            ensure!(store_id == destructor.store_id, "Destructor was not created with the correct store.");
+        }
+
+        Ok(Self { kind: ResourceKindValue::Host { store_id, resource_id: ID_COUNTER.fetch_add(1, Ordering::AcqRel), destructor } })
+    }
+
+    pub(crate) fn is_owned_by_instance(&self, instance: u64) -> bool {
+        if let ResourceKindValue::Instantiated { instance: a, .. } = &self.kind {
+            instance == *a
+        }
+        else {
+            false
+        }
+    }
+
+    pub(crate) fn from_resolve(id: Id<wit_parser::TypeDef>, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+        let ab = Self { kind: ResourceKindValue::Abstract { id: id.index(), component: component.id } };
+        if let Some(map) = resource_map {
+            Ok(map[&ab].clone())
+        }
+        else {
+            Ok(ab)
+        }
+    }
+
+    pub(crate) fn host_destructor(&self) -> Option<Option<crate::func::Func>> {
+        if let ResourceKindValue::Host { destructor, .. } = &self.kind {
+            Some(destructor.clone())
+        }
+        else {
+            None
+        }
+    }
+
+    pub(crate) fn instantiate(&self, store_id: u64, instance: u64) -> Result<Self> {
+        if let ResourceKindValue::Abstract { id, component } = &self.kind {
+            Ok(Self { kind: ResourceKindValue::Instantiated { id: *id, instance, store_id } })
+        }
+        else {
+            bail!("Resource was not abstract.");
+        }
+    }
+
+    pub(crate) fn is_instantiated(&self) -> bool {
+        match &self.kind {
+            ResourceKindValue::Abstract { .. } => false,
+            _ => true
+        }
+    }
+
+    pub(crate) fn store_id(&self) -> u64 {
+        match &self.kind {
+            ResourceKindValue::Abstract { .. } => panic!("Tried to get ID for abstract type."),
+            ResourceKindValue::Instantiated { store_id, .. } => *store_id,
+            ResourceKindValue::Host { store_id, .. } => *store_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ResourceKindValue {
+    Abstract { id: usize, component: u64 },
+    Instantiated { id: usize, instance: u64, store_id: u64 },
+    Host { store_id: u64, resource_id: u64, destructor: Option<crate::func::Func> }
+}
+
+impl PartialEq for ResourceKindValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ResourceKindValue::Abstract { id: a, component: b }, ResourceKindValue::Abstract { id: x, component: y }) => a == x && b == y,
+            (ResourceKindValue::Instantiated { id: a, instance: b, .. }, ResourceKindValue::Instantiated { id: x, instance: y, .. }) => a == x && b == y,
+            (ResourceKindValue::Host { resource_id: a, .. }, ResourceKindValue::Host { resource_id: x, .. }) => a == x,
+            _ => false
+        }
+    }
+}
+
+impl Eq for ResourceKindValue {}
+
+impl Hash for ResourceKindValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            ResourceKindValue::Abstract { id, component } => { id.hash(state); component.hash(state); },
+            ResourceKindValue::Instantiated { id, instance, store_id } => { id.hash(state); instance.hash(state); },
+            ResourceKindValue::Host { store_id, resource_id, destructor } => resource_id.hash(state),
+        }
     }
 }
 
@@ -343,11 +450,11 @@ impl std::fmt::Debug for FuncType {
 }
 
 impl FuncType {
-    pub(crate) fn from_resolve(func: &wit_parser::Function, resolve: &wit_parser::Resolve) -> Result<Self> {
-        let mut params_results = func.params.iter().map(|(_, ty)| ValueType::from_resolve(ty, resolve)).collect::<Result<Vec<_>>>()?;
+    pub(crate) fn from_component(func: &wit_parser::Function, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+        let mut params_results = func.params.iter().map(|(_, ty)| ValueType::from_component(ty, component, resource_map)).collect::<Result<Vec<_>>>()?;
         let len_params = params_results.len();
         
-        for result in func.results.iter_types().map(|ty| ValueType::from_resolve(ty, resolve)) {
+        for result in func.results.iter_types().map(|ty| ValueType::from_component(ty, component, resource_map)) {
             params_results.push(result?);
         }
 

@@ -10,6 +10,7 @@ fxhash = "0.2.1"
 id-arena = "2.2.1"
 ref-cast = "1.0.19"
 semver = "1.0.18"
+vec-option = "0.3.0"
 wasm_runtime_layer = { version = "0.1.1", features = [ "backend_wasmi" ] }
 wasmtime-environ = { git = "https://github.com/bytecodealliance/wasmtime", branch = "release-12.0.0", features = [ "component-model" ] }
 wit-component = { version = "0.13.1" }
