@@ -1,5 +1,3 @@
-#![allow(warnings)]
-
 mod abi;
 mod func;
 mod identifier;
