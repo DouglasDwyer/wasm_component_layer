@@ -87,7 +87,7 @@ impl Component {
             interface_identifiers,
             modules,
             package_identifiers,
-            resource_map: vec!(TypeResourceTableIndex::from_u32(0); resolve.types.len()),
+            resource_map: vec!(TypeResourceTableIndex::from_u32(u32::MAX - 1); resolve.types.len()),
             resolve,
             size_align,
             translation,
@@ -849,7 +849,6 @@ impl Instance {
                             let rep = require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
                             let mut table_array = tables.try_lock().expect("Could not get mutual reference to table.");
                             results[0] = wasm_runtime_layer::Value::I32(table_array[x as usize].add(HandleElement { rep, own: true, lend_count: 0 }));
-                            println!("A resource was created.");
                             Ok(())
                         })))
                     },
@@ -873,6 +872,7 @@ impl Instance {
                             let current_table = &mut table_array[x as usize];
                     
                             let elem_borrow = current_table.get(idx)?;
+                            
                             if elem_borrow.own {
                                 ensure!(elem_borrow.lend_count == 0, "Attempted to drop loaned resource.");
                                 let elem = current_table.remove(idx)?;
@@ -918,7 +918,7 @@ impl Instance {
             }
         }
 
-        Self::fill_destructors(inner, ctx, destructors)
+        Self::fill_destructors(inner, ctx, destructors, resource_map)
     }
 
     fn generate_imports(inner: &InstanceInner, mut store: impl AsContextMut, linker: &Linker, module: &ModuleTranslation, defs: &[CoreDef], destructors: &mut Vec<TrampolineIndex>, resource_map: &FxHashMap<ResourceType, ResourceType>) -> Result<Imports> {
@@ -953,8 +953,9 @@ impl Instance {
         inst.func(&import.name).ok_or_else(|| Error::msg(format!("Could not find function import {}", import.name)))
     }
 
-    fn fill_destructors(mut inner: InstanceInner, ctx: impl AsContext, destructors: Vec<TrampolineIndex>) -> Result<InstanceInner> {
+    fn fill_destructors(mut inner: InstanceInner, ctx: impl AsContext, destructors: Vec<TrampolineIndex>, resource_map: &FxHashMap<ResourceType, ResourceType>) -> Result<InstanceInner> {
         let mut tables = inner.resource_tables.try_lock().expect("Could not get access to resource tables.");
+        
         for index in destructors {
             let (x, def) = require_matches!(&inner.component.generated_trampolines[&index], GeneratedTrampoline::ResourceDrop(x, def), (x, def));
             if let Some(def) = def {
@@ -962,6 +963,14 @@ impl Instance {
                 tables[x.as_u32() as usize].set_destructor(Some(require_matches!(Self::core_export(&inner, &ctx, export), Some(Extern::Func(x)), x)));
             }
         }
+
+        for (id, idx) in inner.component.resolve.types.iter().filter_map(|(i, _)| { let val = inner.component.resource_map[i.index()]; (val.as_u32() < u32::MAX - 1).then_some((i, val)) }) {
+            let res = ResourceType::from_resolve(id, &inner.component, Some(resource_map))?;
+            if let Some(Some(func)) = res.host_destructor() {
+                tables[idx.as_u32() as usize].set_destructor(Some(func));
+            }
+        }
+
         drop(tables);
 
         Ok(inner)
@@ -1327,6 +1336,9 @@ mod tests {
 
         let resource = ResourceType::new(&mut store, None).unwrap();
 
+        let f_func = TypedFunc::new(&mut store, |ctx, ()| Ok(("aa".to_owned(),)));
+        println!("Calling got {}", f_func.call(&mut store, (())).unwrap().0);
+
         let mut linker = Linker::default();
 
         let inst_0 = linker.instantiate(&mut store, &comp_0).unwrap();
@@ -1334,14 +1346,15 @@ mod tests {
         let real_inst = inst_0.exports().instance(&"test:guest/tester".try_into().unwrap()).unwrap();
 
         let link_int = linker.define_instance("test:guest/tester".try_into().unwrap()).unwrap();
-        link_int.define_resource("exp", real_inst.resource("exp").unwrap()).unwrap();
+        //link_int.define_resource("exp", real_inst.resource("exp").unwrap()).unwrap();
 
         //link_int.define_func("[constructor]exp", real_inst.func("[constructor]exp").unwrap()).unwrap();
         //link_int.define_func("[method]exp.test", real_inst.func("[method]exp.test").unwrap()).unwrap();
 
-        let my_resource = ResourceType::new(&mut store, None).unwrap();
+        let defun = crate::func::Func::new(&mut store, crate::types::FuncType::new([crate::types::ValueType::S32], []), |_, _, _| { println!("im ded an gone"); Ok(())});
+        let my_resource = ResourceType::new(&mut store, Some(defun)).unwrap();
         let cpy = my_resource.clone();
-        //link_int.define_resource("exp", my_resource.clone());
+        link_int.define_resource("exp", my_resource.clone());
         
         link_int.define_func("[constructor]exp", crate::func::Func::new(&mut store, crate::types::FuncType::new([], [crate::types::ValueType::Own(my_resource.clone())]), move |_, _, res| { res[0] = crate::values::Value::Own(crate::values::ResourceOwn::new(29, cpy.clone()).unwrap()); Ok(()) })).unwrap();
         link_int.define_func("[method]exp.test", crate::func::Func::new(&mut store, crate::types::FuncType::new([crate::types::ValueType::Borrow(my_resource.clone())], [crate::types::ValueType::String]), |_, _, res| { res[0] = crate::values::Value::String("yay".into()); Ok(()) })).unwrap();

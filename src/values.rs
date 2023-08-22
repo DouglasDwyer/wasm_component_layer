@@ -1,6 +1,7 @@
 use anyhow::*;
-use crate::{AsContext, AsContextMut};
+use crate::{AsContext, AsContextMut, require_matches::require_matches};
 use crate::types::*;
+use std::any::*;
 use std::marker::*;
 use std::mem::*;
 use std::ops::*;
@@ -98,22 +99,25 @@ impl TryFrom<&wasm_runtime_layer::Value> for Value {
 macro_rules! impl_primitive_from {
     ($(($type_name: ident, $enum_name: ident))*) => {
         $(
-            impl From<$type_name> for Value {
-                fn from(value: $type_name) -> Value {
-                    Value::$enum_name(value)
+            impl From<&$type_name> for Value {
+                fn from(value: &$type_name) -> Value {
+                    Value::$enum_name(*value)
                 }
             }
 
-            impl TryFrom<Value> for $type_name {
+            impl TryFrom<$type_name> for Value {
                 type Error = Error;
 
-                fn try_from(value: Value) -> Result<Self> {
-                    if let Value::$enum_name(x) = value {
-                        Ok(x)
-                    }
-                    else {
-                        bail!("Incorrect value type. Got {:?}", value.ty())
-                    }
+                fn try_from(value: $type_name) -> Result<Self> {
+                    Ok(Value::$enum_name(value))
+                }
+            }
+
+            impl TryFrom<&Value> for $type_name {
+                type Error = Error;
+
+                fn try_from(value: &Value) -> Result<Self> {
+                    Ok(require_matches!(value, Value::$enum_name(x), *x))
                 }
             }
         )*
@@ -538,10 +542,6 @@ pub(crate) enum FlagsList {
     Multiple(Arc<Vec<u32>>)
 }
 
-pub trait ComponentType where Self: TryFrom<Value>, Value: TryFrom<Self> {
-    fn ty() -> ValueType;
-}
-
 #[derive(Clone, Debug)]
 pub struct ResourceOwn {
     tracker: Arc<AtomicUsize>,
@@ -592,7 +592,7 @@ impl ResourceOwn {
             destructor.call(ctx.as_context_mut().inner, &[wasm_runtime_layer::Value::I32(self.rep)], &mut [])?;
         }
         else if let Some(Some(destructor)) = self.ty.host_destructor() {
-            destructor.call(ctx, &[crate::values::Value::S32(self.rep)], &mut [])?;
+            destructor.call(ctx.as_context_mut().inner, &[wasm_runtime_layer::Value::I32(self.rep)], &mut [])?;
         }
 
         self.tracker.store(usize::MAX, Ordering::Release);
@@ -665,6 +665,97 @@ impl PartialEq for ResourceBorrow {
     }
 }
 
+pub trait ComponentType: 'static + for<'a> TryFrom<&'a Value, Error = Error> + TryInto<Value, Error = Error> {
+    fn ty() -> ValueType;
+}
+
+macro_rules! impl_primitive_component_type {
+    ($(($type_name: ident, $enum_name: ident))*) => {
+        $(
+            impl ComponentType for $type_name {
+                fn ty() -> ValueType {
+                    ValueType::$enum_name
+                }
+            }
+        )*
+    };
+}
+
+impl_primitive_component_type!((bool, Bool) (i8, S8) (u8, U8) (i16, S16) (u16, U16) (i32, S32) (u32, U32) (i64, S64) (u64, U64) (f32, F32) (f64, F64) (char, Char));
+
+impl ComponentType for String {
+    fn ty() -> ValueType {
+        ValueType::String
+    }
+}
+
+impl TryFrom<&Value> for String {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self> {
+        Ok(require_matches!(value, Value::String(x), (**x).into()))
+    }
+}
+
+impl TryFrom<String> for Value {
+    type Error = Error;
+
+    fn try_from(value: String) -> Result<Self> {
+        Ok(Value::String(value.into()))
+    }
+}
+
+impl<T: ComponentType> ComponentType for Vec<T> {
+    fn ty() -> ValueType {
+        ValueType::List(ListType::new(T::ty()))
+    }
+}
+
+impl<T: ComponentType> TryFrom<&Value> for Vec<T> {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self> {
+        let list = require_matches!(value, Value::List(x), x);
+        
+        let id = TypeId::of::<T>();
+        Ok(if id == TypeId::of::<bool>() { *(Box::new(require_matches!(&list.values, ListSpecialization::Bool(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<i8>() { *(Box::new(require_matches!(&list.values, ListSpecialization::S8(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<u8>() { *(Box::new(require_matches!(&list.values, ListSpecialization::U8(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<i16>() { *(Box::new(require_matches!(&list.values, ListSpecialization::S16(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<u16>() { *(Box::new(require_matches!(&list.values, ListSpecialization::U16(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<i32>() { *(Box::new(require_matches!(&list.values, ListSpecialization::S32(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<u32>() { *(Box::new(require_matches!(&list.values, ListSpecialization::U32(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<i64>() { *(Box::new(require_matches!(&list.values, ListSpecialization::S64(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<u64>() { *(Box::new(require_matches!(&list.values, ListSpecialization::U64(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<f32>() { *(Box::new(require_matches!(&list.values, ListSpecialization::F32(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<f64>() { *(Box::new(require_matches!(&list.values, ListSpecialization::F64(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else if id == TypeId::of::<char>() { *(Box::new(require_matches!(&list.values, ListSpecialization::Char(x), x).to_vec()) as Box<dyn Any>).downcast().expect("Could not downcast vector.") }
+        else { require_matches!(&list.values, ListSpecialization::Other(x), x).into_iter().map(|x| T::try_from(x)).collect::<Result<_>>()? })
+    }
+}
+
+impl<T: ComponentType> TryFrom<Vec<T>> for Value {
+    type Error = Error;
+
+    fn try_from(value: Vec<T>) -> Result<Self> {
+        let holder = Box::new(value) as Box<dyn Any>;
+        let id = TypeId::of::<T>();
+        Ok(Value::List(if id == TypeId::of::<bool>() { List { ty: ListType::new(ValueType::Bool), values: ListSpecialization::Bool(Arc::from(*(holder).downcast::<Vec<bool>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<i8>() { List { ty: ListType::new(ValueType::S8), values: ListSpecialization::S8(Arc::from(*(holder).downcast::<Vec<i8>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<u8>() { List { ty: ListType::new(ValueType::U8), values: ListSpecialization::U8(Arc::from(*(holder).downcast::<Vec<u8>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<i16>() { List { ty: ListType::new(ValueType::S16), values: ListSpecialization::S16(Arc::from(*(holder).downcast::<Vec<i16>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<u16>() { List { ty: ListType::new(ValueType::U16), values: ListSpecialization::U16(Arc::from(*(holder).downcast::<Vec<u16>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<i32>() { List { ty: ListType::new(ValueType::S32), values: ListSpecialization::S32(Arc::from(*(holder).downcast::<Vec<i32>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<u32>() { List { ty: ListType::new(ValueType::U32), values: ListSpecialization::U32(Arc::from(*(holder).downcast::<Vec<u32>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<i64>() { List { ty: ListType::new(ValueType::S64), values: ListSpecialization::S64(Arc::from(*(holder).downcast::<Vec<i64>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<u64>() { List { ty: ListType::new(ValueType::U64), values: ListSpecialization::U64(Arc::from(*(holder).downcast::<Vec<u64>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<f32>() { List { ty: ListType::new(ValueType::F32), values: ListSpecialization::F32(Arc::from(*(holder).downcast::<Vec<f32>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<f64>() { List { ty: ListType::new(ValueType::F64), values: ListSpecialization::F64(Arc::from(*(holder).downcast::<Vec<f64>>().expect("Could not downcast vector."))) } }
+        else if id == TypeId::of::<char>() { List { ty: ListType::new(ValueType::Char), values: ListSpecialization::Char(Arc::from(*(holder).downcast::<Vec<char>>().expect("Could not downcast vector."))) } }
+        else { List { ty: ListType::new(T::ty()), values: ListSpecialization::Other(holder.downcast::<Vec<T>>().expect("Could not downcast vector.").into_iter().map(|x| x.try_into()).collect::<Result<_>>()?) } }))
+    }
+}
+
 mod private {
     use super::*;
 
@@ -730,18 +821,18 @@ mod private {
 
         fn next(&mut self) -> Option<Self::Item> {
             Some(match self {
-                ListSpecializationIter::Bool(x) => Value::from(*x.next()?),
-                ListSpecializationIter::S8(x) => Value::from(*x.next()?),
-                ListSpecializationIter::U8(x) => Value::from(*x.next()?),
-                ListSpecializationIter::S16(x) => Value::from(*x.next()?),
-                ListSpecializationIter::U16(x) => Value::from(*x.next()?),
-                ListSpecializationIter::S32(x) => Value::from(*x.next()?),
-                ListSpecializationIter::U32(x) => Value::from(*x.next()?),
-                ListSpecializationIter::S64(x) => Value::from(*x.next()?),
-                ListSpecializationIter::U64(x) => Value::from(*x.next()?),
-                ListSpecializationIter::F32(x) => Value::from(*x.next()?),
-                ListSpecializationIter::F64(x) => Value::from(*x.next()?),
-                ListSpecializationIter::Char(x) => Value::from(*x.next()?),
+                ListSpecializationIter::Bool(x) => Value::from(x.next()?),
+                ListSpecializationIter::S8(x) => Value::from(x.next()?),
+                ListSpecializationIter::U8(x) => Value::from(x.next()?),
+                ListSpecializationIter::S16(x) => Value::from(x.next()?),
+                ListSpecializationIter::U16(x) => Value::from(x.next()?),
+                ListSpecializationIter::S32(x) => Value::from(x.next()?),
+                ListSpecializationIter::U32(x) => Value::from(x.next()?),
+                ListSpecializationIter::S64(x) => Value::from(x.next()?),
+                ListSpecializationIter::U64(x) => Value::from(x.next()?),
+                ListSpecializationIter::F32(x) => Value::from(x.next()?),
+                ListSpecializationIter::F64(x) => Value::from(x.next()?),
+                ListSpecializationIter::Char(x) => Value::from(x.next()?),
                 ListSpecializationIter::Other(x) => x.next()?.clone(),
             })
         }
@@ -765,7 +856,7 @@ mod private {
                     }
 
                     fn from_value_iter(iter: impl IntoIterator<Item = Value>) -> Result<ListSpecialization> {
-                        let values: Arc<[Self]> = iter.into_iter().map(|x| x.try_into()).collect::<Result<_>>()?;
+                        let values: Arc<[Self]> = iter.into_iter().map(|x| TryInto::try_into(&x)).collect::<Result<_>>()?;
                         Ok(ListSpecialization::$enum_name(values))
                     }
             

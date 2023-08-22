@@ -1,5 +1,6 @@
 use anyhow::*;
-use crate::{AsContext, ComponentInner};
+use crate::{AsContext, AsContextMut, ComponentInner};
+use crate::values::ComponentType;
 use fxhash::*;
 use id_arena::*;
 use std::hash::*;
@@ -324,13 +325,24 @@ pub struct ResourceType {
 }
 
 impl ResourceType {
-    pub fn new<C: crate::AsContext>(ctx: C, destructor: Option<crate::func::Func>) -> Result<Self> {
+    pub fn new(mut ctx: impl AsContextMut, destructor: Option<crate::func::Func>) -> Result<Self> {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let store_id = ctx.as_context().inner.data().id;
-        if let Some(destructor) = &destructor {
+        let destructor = if let Some(destructor) = destructor {
             ensure!(store_id == destructor.store_id, "Destructor was not created with the correct store.");
+            let ty = destructor.ty();
+            ensure!(ty.results() == &[], "Destructor did not have the correct signature.");
+            ensure!(ty.params() == &[ValueType::S32], "Destructor did not have the correct signature.");
+
+            Some(wasm_runtime_layer::Func::new(ctx.as_context_mut().inner, wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []), move |ctx, val, res| {
+                let wasm_runtime_layer::Value::I32(rep) = &val[0] else { bail!("Incorrect rep type.") };
+                destructor.call(crate::StoreContextMut { inner: ctx }, &[crate::values::Value::S32(*rep)], &mut [])
+            }))
         }
+        else {
+            None
+        };
 
         Ok(Self { kind: ResourceKindValue::Host { store_id, resource_id: ID_COUNTER.fetch_add(1, Ordering::AcqRel), destructor } })
     }
@@ -354,7 +366,7 @@ impl ResourceType {
         }
     }
 
-    pub(crate) fn host_destructor(&self) -> Option<Option<crate::func::Func>> {
+    pub(crate) fn host_destructor(&self) -> Option<Option<wasm_runtime_layer::Func>> {
         if let ResourceKindValue::Host { destructor, .. } = &self.kind {
             Some(destructor.clone())
         }
@@ -392,7 +404,7 @@ impl ResourceType {
 enum ResourceKindValue {
     Abstract { id: usize, component: u64 },
     Instantiated { id: usize, instance: u64, store_id: u64 },
-    Host { store_id: u64, resource_id: u64, destructor: Option<crate::func::Func> }
+    Host { store_id: u64, resource_id: u64, destructor: Option<wasm_runtime_layer::Func> }
 }
 
 impl PartialEq for ResourceKindValue {
@@ -526,3 +538,69 @@ impl FuncType {
         Ok(())
     }
 }
+
+pub trait ComponentList: Sized {
+    const LEN: usize;
+
+    fn into_tys(types: &mut [ValueType]);
+    fn into_values(self, values: &mut [crate::values::Value]) -> Result<()>;
+    fn from_values(values: &[crate::values::Value]) -> Result<Self>;
+}
+
+impl ComponentList for () {
+    const LEN: usize = 0;
+
+    fn into_tys(types: &mut [ValueType]) {}
+    
+    fn from_values(values: &[crate::values::Value]) -> Result<Self> {
+        Ok(())
+    }
+
+    fn into_values(self, values: &mut [crate::values::Value]) -> Result<()> {
+        Ok(())
+    }
+}
+
+macro_rules! count {
+    () => (0usize);
+    ( $x:tt $($xs:tt)* ) => (1usize + count!($($xs)*));
+}
+
+macro_rules! impl_component_list {
+    ( $( ($name:ident, $extra:ident) )+ ) => {
+        impl<$($name: ComponentType),+> ComponentList for ($($name,)+)
+        {
+            const LEN: usize = count!($($name.do_something(),)+);
+
+            fn into_tys(types: &mut [ValueType]) {
+                let mut counter = 0;
+                $(types[{ let res = counter; counter += 1; res }] = $name::ty();)+
+            }
+
+            fn into_values(self, values: &mut [crate::values::Value]) -> Result<()> {
+                let ($($extra,)+) = self;
+                let mut counter = 0;
+                $(values[{ let res = counter; counter += 1; res }] = $extra.try_into()?;)+
+                Ok(())
+            }
+
+            fn from_values(values: &[crate::values::Value]) -> Result<Self> {
+                let mut counter = 0;
+                Ok(($($name::try_from(&values[{ let res = counter; counter += 1; res }])?, )+))
+            }
+        }
+    };
+}
+
+impl_component_list!((A, a));
+impl_component_list!((A, a) (B, b));
+impl_component_list!((A, a) (B, b) (C, c));
+impl_component_list!((A, a) (B, b) (C, c) (D, d));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i) (J, j));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i) (J, j) (K, k));
+impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i) (J, j) (K, k) (L, l));

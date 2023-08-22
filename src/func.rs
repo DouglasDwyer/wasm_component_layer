@@ -102,6 +102,15 @@ impl Func {
         self.ty.clone()
     }
 
+    pub fn typed<P: ComponentList, R: ComponentList>(&self) -> Result<TypedFunc<P, R>> {
+        let mut params_results = vec!(ValueType::Bool; P::LEN + R::LEN);
+        P::into_tys(&mut params_results[..P::LEN]);
+        R::into_tys(&mut params_results[P::LEN..]);
+        ensure!(&params_results[..P::LEN] == self.ty.params(), "Parameters did not match function signature.");
+        ensure!(&params_results[P::LEN..] == self.ty.results(), "Results did not match function signature.");
+        Ok(TypedFunc { inner: self.clone(), data: PhantomData })
+    }
+
     pub(crate) fn call_from_guest<C: AsContextMut>(&self, mut ctx: C, options: &GuestInvokeOptions, arguments: &[wasm_runtime_layer::Value], results: &mut [wasm_runtime_layer::Value]) -> Result<()> {
         let args = arguments.iter().map(TryFrom::try_from).collect::<Result<Vec<_>>>()?;
         let mut res = results.iter().map(TryFrom::try_from).collect::<Result<Vec<_>>>()?;
@@ -403,8 +412,9 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 results.push(Value::Record(crate::values::Record::from_sorted(official_ty.clone(), official_ty.fields.iter().map(|(i, name, _)| (name.clone(), replace(&mut operands[*i], Value::Bool(false)))))));
                 operands.clear();
             },
-            Instruction::HandleLower { handle, name, ty: def } => match &self.types[def.index()] {
+            Instruction::HandleLower { handle, name, ty } => match &self.types[ty.index()] {
                 ValueType::Own(ty) => {
+                    let def = match handle { Handle::Own(x) => x, Handle::Borrow(x) => x };
                     let val = require_matches!(operands.pop(), Some(Value::Own(x)), x);
                     let rep = val.lower(&mut self.ctx)?;
 
@@ -412,6 +422,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     results.push(Value::S32(tables[self.component.resource_map[def.index()].as_u32() as usize].add(HandleElement { rep, own: true, lend_count: 0 })));
                 },
                 ValueType::Borrow(ty) => {
+                    let def = match handle { Handle::Own(x) => x, Handle::Borrow(x) => x };
                     let val = require_matches!(operands.pop(), Some(Value::Borrow(x)), x);
                     let rep = val.lower(&mut self.ctx)?;
 
@@ -428,8 +439,9 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 },
                 _ => unreachable!()
             },
-            Instruction::HandleLift { handle, name, ty: def } => match &self.types[def.index()] {
+            Instruction::HandleLift { handle, name, ty } => match &self.types[ty.index()] {
                 ValueType::Own(ty) => {
+                    let def = match handle { Handle::Own(x) => x, Handle::Borrow(x) => x };
                     let val = require_matches!(operands.pop(), Some(Value::S32(x)), x);
                     
                     let mut tables = self.resource_tables.try_lock().expect("Could not acquire table access.");
@@ -446,6 +458,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     }
                 },
                 ValueType::Borrow(ty) => {
+                    let def = match handle { Handle::Own(x) => x, Handle::Borrow(x) => x };
                     let val = require_matches!(operands.pop(), Some(Value::S32(x)), x);
                     
                     let mut tables = self.resource_tables.try_lock().expect("Could not acquire table access.");
@@ -539,7 +552,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             },
             Instruction::CallInterface { func } => {
                 for i in 0..func.results.len() {
-                    results.push(Value::S32(0));
+                    results.push(Value::Bool(false));
                 }
 
                 self.callee_interface.expect("No available interface callee.").call(self.ctx.as_context_mut(), &operands, &mut results[..])?;
@@ -612,6 +625,41 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TypedFunc<P: ComponentList, R: ComponentList> {
+    inner: Func,
+    data: PhantomData<fn(P) -> R>
+}
+
+impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
+    pub fn new<C: AsContextMut>(mut ctx: C, f: impl 'static + Send + Sync + Fn(StoreContextMut<C::UserState, C::Engine>, P) -> Result<R>) -> Self {
+        let mut params_results = vec!(ValueType::Bool; P::LEN + R::LEN);
+        P::into_tys(&mut params_results[..P::LEN]);
+        R::into_tys(&mut params_results[P::LEN..]);
+
+        Self {
+            inner: Func::new(ctx, FuncType::new(params_results[..P::LEN].iter().cloned(), params_results[P::LEN..].iter().cloned()), move |ctx, args, res| {
+                let p = P::from_values(args)?;
+                let r = f(ctx, p)?;
+                r.into_values(res)
+            }),
+            data: PhantomData
+        }
+    }
+
+    pub fn call(&self, ctx: impl AsContextMut, params: P) -> Result<R> {
+        let mut params_results = vec!(Value::Bool(false); P::LEN + R::LEN);
+        params.into_values(&mut params_results[0..P::LEN])?;
+        let (params, results) = params_results.split_at_mut(P::LEN);
+        self.inner.call(ctx, params, results)?;
+        R::from_values(results)
+    }
+
+    pub fn func(&self) -> Func {
+        self.inner.clone()
+    }
+}
+
 trait Blittable: Sized {
     type Array: ByteArray;
 
@@ -656,7 +704,6 @@ macro_rules! impl_blittable {
 }
 
 impl_blittable!(u8 u16 u32 u64 i8 i16 i32 i64 f32 f64);
-
 trait ByteArray: Sized {
     fn load(ctx: impl AsContext, memory: &Memory, offset: usize) -> Result<Self>;
     fn store(self, ctx: impl AsContextMut, memory: &Memory, offset: usize) -> Result<()>;
