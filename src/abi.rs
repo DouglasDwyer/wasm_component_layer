@@ -829,7 +829,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         unimplemented!("Bruh {:?}", self.stack);
     }
 
-    fn finish_block(&mut self, size: usize) {
+    fn finish_block(&mut self, _size: usize) {
         unimplemented!()
     }
 

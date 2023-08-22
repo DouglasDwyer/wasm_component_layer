@@ -6,14 +6,14 @@ mod require_matches;
 mod types;
 mod values;
 
-use std::collections::hash_map::*;
+
 use std::sync::atomic::*;
 use std::sync::*;
 
 use anyhow::*;
 use fxhash::*;
 use id_arena::*;
-use ref_cast::*;
+
 use vec_option::*;
 pub use wasm_runtime_layer::Engine;
 use wasm_runtime_layer::*;
@@ -141,7 +141,7 @@ impl Component {
     }
 
     fn generate_resources(mut inner: ComponentInner) -> Result<ComponentInner> {
-        for (key, item) in &inner.resolve.worlds[inner.world_id].imports {
+        for (_key, item) in &inner.resolve.worlds[inner.world_id].imports {
             match item {
                 WorldItem::Type(x) => {
                     if inner.resolve.types[*x].kind == TypeDefKind::Resource {
@@ -181,7 +181,7 @@ impl Component {
             }
         }
 
-        for (key, item) in &inner.resolve.worlds[inner.world_id].exports {
+        for (_key, item) in &inner.resolve.worlds[inner.world_id].exports {
             match item {
                 WorldItem::Type(x) => {
                     if inner.resolve.types[*x].kind == TypeDefKind::Resource {
@@ -270,13 +270,13 @@ impl Component {
             imports.insert(name, key.clone());
         }
 
-        let root_name = Arc::<str>::from("$root");
+        let _root_name = Arc::<str>::from("$root");
 
         let mut destructors = FxHashMap::default();
 
         for initializer in &inner.translation.component.initializers {
             match initializer {
-                GlobalInitializer::InstantiateModule(InstantiateModule::Static(idx, def)) => {
+                GlobalInitializer::InstantiateModule(InstantiateModule::Static(idx, _def)) => {
                     inner.instance_modules.push(*idx);
                 }
                 GlobalInitializer::ExtractMemory(ExtractMemory { index, export }) => {
@@ -945,7 +945,7 @@ impl Instance {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
-        for i in 0..component.0.instance_modules.len() {
+        for _i in 0..component.0.instance_modules.len() {
             instance_flags.push(Global::new(
                 ctx.as_context_mut().inner,
                 wasm_runtime_layer::Value::I32(
@@ -990,10 +990,10 @@ impl Instance {
     }
 
     fn generate_types(
-        ctx: impl AsContext,
-        instance_id: u64,
+        _ctx: impl AsContext,
+        _instance_id: u64,
         component: &Component,
-        linker: &Linker,
+        _linker: &Linker,
         map: &FxHashMap<ResourceType, ResourceType>,
     ) -> Result<Arc<[crate::types::ValueType]>> {
         let mut types = Vec::with_capacity(component.0.resolve.types.len());
@@ -1256,7 +1256,7 @@ impl Instance {
                         Ok(Extern::Func(Func::new(
                             ctx.as_context_mut().inner,
                             ty,
-                            move |ctx, args, results| {
+                            move |_ctx, args, results| {
                                 let rep =
                                     require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
                                 let mut table_array = tables
@@ -1279,10 +1279,10 @@ impl Instance {
                         Ok(Extern::Func(Func::new(
                             ctx.as_context_mut().inner,
                             ty,
-                            move |ctx, args, results| {
+                            move |_ctx, args, results| {
                                 let idx =
                                     require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
-                                let mut table_array = tables
+                                let table_array = tables
                                     .try_lock()
                                     .expect("Could not get mutual reference to table.");
                                 results[0] = wasm_runtime_layer::Value::I32(
@@ -1299,7 +1299,7 @@ impl Instance {
                         Ok(Extern::Func(Func::new(
                             ctx.as_context_mut().inner,
                             ty,
-                            move |mut ctx, args, results| {
+                            move |ctx, args, _results| {
                                 let idx =
                                     require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
                                 let mut table_array = tables
@@ -1438,7 +1438,7 @@ impl Instance {
     }
 
     fn get_component_import(
-        inner: &InstanceInner,
+        _inner: &InstanceInner,
         import: &ComponentImport,
         linker: &Linker,
     ) -> Result<crate::func::Func> {
@@ -1455,7 +1455,7 @@ impl Instance {
     }
 
     fn fill_destructors(
-        mut inner: InstanceInner,
+        inner: InstanceInner,
         ctx: impl AsContext,
         destructors: Vec<TrampolineIndex>,
         resource_map: &FxHashMap<ResourceType, ResourceType>,
@@ -1882,16 +1882,16 @@ mod tests {
         let comp_0 = Component::new(&engine, WASM_0).unwrap();
         let comp = Component::new(&engine, WASM).unwrap();
 
-        let resource = ResourceType::new(&mut store, None).unwrap();
+        let _resource = ResourceType::new(&mut store, None).unwrap();
 
-        let f_func = TypedFunc::new(&mut store, |ctx, ()| Ok(("aa".to_owned(),)));
-        println!("Calling got {}", f_func.call(&mut store, (())).unwrap().0);
+        let f_func = TypedFunc::new(&mut store, |_ctx, ()| Ok(("aa".to_owned(),)));
+        println!("Calling got {}", f_func.call(&mut store, ()).unwrap().0);
 
         let mut linker = Linker::default();
 
         let inst_0 = linker.instantiate(&mut store, &comp_0).unwrap();
 
-        let real_inst = inst_0
+        let _real_inst = inst_0
             .exports()
             .instance(&"test:guest/tester".try_into().unwrap())
             .unwrap();

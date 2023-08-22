@@ -330,7 +330,7 @@ impl EnumType {
         self.cases.iter().map(|x| &**x)
     }
 
-    fn from_component(ty: &wit_parser::Enum, component: &ComponentInner) -> Self {
+    fn from_component(ty: &wit_parser::Enum, _component: &ComponentInner) -> Self {
         Self::new(ty.cases.iter().map(|x| x.name.as_str()))
     }
 }
@@ -436,7 +436,7 @@ impl FlagsType {
         self.names.iter().map(|x| &**x)
     }
 
-    fn from_component(ty: &wit_parser::Flags, component: &ComponentInner) -> Result<Self> {
+    fn from_component(ty: &wit_parser::Flags, _component: &ComponentInner) -> Result<Self> {
         Self::new(ty.flags.iter().map(|x| x.name.as_ref()))
     }
 }
@@ -475,7 +475,7 @@ impl ResourceType {
             Some(wasm_runtime_layer::Func::new(
                 ctx.as_context_mut().inner,
                 wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []),
-                move |ctx, val, res| {
+                move |ctx, val, _res| {
                     let wasm_runtime_layer::Value::I32(rep) = &val[0] else { bail!("Incorrect rep type.") };
                     destructor.call(
                         crate::StoreContextMut { inner: ctx },
@@ -532,7 +532,7 @@ impl ResourceType {
     }
 
     pub(crate) fn instantiate(&self, store_id: u64, instance: u64) -> Result<Self> {
-        if let ResourceKindValue::Abstract { id, component } = &self.kind {
+        if let ResourceKindValue::Abstract { id, component: _ } = &self.kind {
             Ok(Self {
                 kind: ResourceKindValue::Instantiated {
                     id: *id,
@@ -622,15 +622,15 @@ impl Hash for ResourceKindValue {
             ResourceKindValue::Instantiated {
                 id,
                 instance,
-                store_id,
+                store_id: _,
             } => {
                 id.hash(state);
                 instance.hash(state);
             }
             ResourceKindValue::Host {
-                store_id,
+                store_id: _,
                 resource_id,
-                destructor,
+                destructor: _,
             } => resource_id.hash(state),
         }
     }
@@ -767,13 +767,13 @@ pub trait ComponentList: Sized {
 impl ComponentList for () {
     const LEN: usize = 0;
 
-    fn into_tys(types: &mut [ValueType]) {}
+    fn into_tys(_types: &mut [ValueType]) {}
 
-    fn from_values(values: &[crate::values::Value]) -> Result<Self> {
+    fn from_values(_values: &[crate::values::Value]) -> Result<Self> {
         Ok(())
     }
 
-    fn into_values(self, values: &mut [crate::values::Value]) -> Result<()> {
+    fn into_values(self, _values: &mut [crate::values::Value]) -> Result<()> {
         Ok(())
     }
 }
