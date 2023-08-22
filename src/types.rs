@@ -1,11 +1,13 @@
+use std::hash::*;
+use std::sync::atomic::*;
+use std::sync::*;
+
 use anyhow::*;
-use crate::{AsContext, AsContextMut, ComponentInner};
-use crate::values::ComponentType;
 use fxhash::*;
 use id_arena::*;
-use std::hash::*;
-use std::sync::*;
-use std::sync::atomic::*;
+
+use crate::values::ComponentType;
+use crate::{AsContext, AsContextMut, ComponentInner};
 
 /// Represents a component model interface type
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -37,7 +39,11 @@ pub enum ValueType {
 }
 
 impl ValueType {
-    pub(crate) fn from_component(ty: &wit_parser::Type, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+    pub(crate) fn from_component(
+        ty: &wit_parser::Type,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
         Ok(match ty {
             wit_parser::Type::Bool => Self::Bool,
             wit_parser::Type::U8 => Self::U8,
@@ -56,22 +62,55 @@ impl ValueType {
         })
     }
 
-    pub(crate) fn from_component_typedef(def: Id<wit_parser::TypeDef>, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
+    pub(crate) fn from_component_typedef(
+        def: Id<wit_parser::TypeDef>,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
         Ok(match &component.resolve.types[def].kind {
-            wit_parser::TypeDefKind::Record(x) => Self::Record(RecordType::from_component(x, component, resource_map)?),
+            wit_parser::TypeDefKind::Record(x) => {
+                Self::Record(RecordType::from_component(x, component, resource_map)?)
+            }
             wit_parser::TypeDefKind::Resource => bail!("Cannot instantiate resource as type."),
             wit_parser::TypeDefKind::Handle(x) => match x {
-                wit_parser::Handle::Own(t) => Self::Own(ResourceType::from_resolve(*t, component, resource_map)?),
-                wit_parser::Handle::Borrow(t) => Self::Borrow(ResourceType::from_resolve(*t, component, resource_map)?)
+                wit_parser::Handle::Own(t) => {
+                    Self::Own(ResourceType::from_resolve(*t, component, resource_map)?)
+                }
+                wit_parser::Handle::Borrow(t) => {
+                    Self::Borrow(ResourceType::from_resolve(*t, component, resource_map)?)
+                }
             },
-            wit_parser::TypeDefKind::Flags(x) => Self::Flags(FlagsType::from_component(x, component)?),
-            wit_parser::TypeDefKind::Tuple(x) => Self::Tuple(TupleType::from_component(x, component, resource_map)?),
-            wit_parser::TypeDefKind::Variant(x) => Self::Variant(VariantType::from_component(x, component, resource_map)?),
+            wit_parser::TypeDefKind::Flags(x) => {
+                Self::Flags(FlagsType::from_component(x, component)?)
+            }
+            wit_parser::TypeDefKind::Tuple(x) => {
+                Self::Tuple(TupleType::from_component(x, component, resource_map)?)
+            }
+            wit_parser::TypeDefKind::Variant(x) => {
+                Self::Variant(VariantType::from_component(x, component, resource_map)?)
+            }
             wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_component(x, component)),
-            wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(Self::from_component(x, component, resource_map)?)),
-            wit_parser::TypeDefKind::Result(x) => Self::Result(ResultType::new(match &x.ok { Some(t) => Some(Self::from_component(t, component, resource_map)?), None => None }, match &x.err { Some(t) => Some(Self::from_component(t, component, resource_map)?), None => None })),
-            wit_parser::TypeDefKind::Union(x) => Self::Union(UnionType::from_component(x, component, resource_map)?),
-            wit_parser::TypeDefKind::List(x) => Self::List(ListType::new(Self::from_component(x, component, resource_map)?)),
+            wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(
+                Self::from_component(x, component, resource_map)?,
+            )),
+            wit_parser::TypeDefKind::Result(x) => Self::Result(ResultType::new(
+                match &x.ok {
+                    Some(t) => Some(Self::from_component(t, component, resource_map)?),
+                    None => None,
+                },
+                match &x.err {
+                    Some(t) => Some(Self::from_component(t, component, resource_map)?),
+                    None => None,
+                },
+            )),
+            wit_parser::TypeDefKind::Union(x) => {
+                Self::Union(UnionType::from_component(x, component, resource_map)?)
+            }
+            wit_parser::TypeDefKind::List(x) => Self::List(ListType::new(Self::from_component(
+                x,
+                component,
+                resource_map,
+            )?)),
             wit_parser::TypeDefKind::Future(_) => bail!("Unimplemented."),
             wit_parser::TypeDefKind::Stream(_) => bail!("Unimplemented."),
             wit_parser::TypeDefKind::Type(x) => Self::from_component(x, component, resource_map)?,
@@ -82,12 +121,14 @@ impl ValueType {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ListType {
-    element: Arc<ValueType>
+    element: Arc<ValueType>,
 }
 
 impl ListType {
     pub fn new(element_ty: ValueType) -> Self {
-        Self { element: Arc::new(element_ty) }
+        Self {
+            element: Arc::new(element_ty),
+        }
     }
 
     pub fn element_ty(&self) -> ValueType {
@@ -97,13 +138,21 @@ impl ListType {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RecordType {
-    pub(crate) fields: Arc<[(usize, Arc<str>, ValueType)]>
+    pub(crate) fields: Arc<[(usize, Arc<str>, ValueType)]>,
 }
 
 impl RecordType {
-    pub fn new<S: Into<Arc<str>>>(fields: impl IntoIterator<Item = (S, ValueType)>) -> Result<Self> {
-        let mut to_sort = fields.into_iter().enumerate().map(|(i, (name, val))| (i, Into::<Arc<str>>::into(name), val)).collect::<Arc<_>>();
-        Arc::get_mut(&mut to_sort).expect("Could not get exclusive reference.").sort_by(|a, b| a.1.cmp(&b.1));
+    pub fn new<S: Into<Arc<str>>>(
+        fields: impl IntoIterator<Item = (S, ValueType)>,
+    ) -> Result<Self> {
+        let mut to_sort = fields
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, val))| (i, Into::<Arc<str>>::into(name), val))
+            .collect::<Arc<_>>();
+        Arc::get_mut(&mut to_sort)
+            .expect("Could not get exclusive reference.")
+            .sort_by(|a, b| a.1.cmp(&b.1));
 
         for pair in to_sort.windows(2) {
             ensure!(pair[0].1 != pair[1].1, "Duplicate field names");
@@ -113,11 +162,21 @@ impl RecordType {
     }
 
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&str, ValueType)> {
-        self.fields.iter().map(|(_, name, val)| (&**name, val.clone()))
+        self.fields
+            .iter()
+            .map(|(_, name, val)| (&**name, val.clone()))
     }
 
-    pub(crate) fn new_sorted(fields: impl IntoIterator<Item = (Arc<str>, ValueType)>) -> Result<Self> {
-        let result = Self { fields: fields.into_iter().enumerate().map(|(i, (a, b))| (i, a, b)).collect() };
+    pub(crate) fn new_sorted(
+        fields: impl IntoIterator<Item = (Arc<str>, ValueType)>,
+    ) -> Result<Self> {
+        let result = Self {
+            fields: fields
+                .into_iter()
+                .enumerate()
+                .map(|(i, (a, b))| (i, a, b))
+                .collect(),
+        };
 
         for pair in result.fields.windows(2) {
             ensure!(pair[0].0 != pair[1].0, "Duplicate field names");
@@ -126,9 +185,26 @@ impl RecordType {
         Ok(result)
     }
 
-    fn from_component(ty: &wit_parser::Record, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
-        let mut to_sort = ty.fields.iter().enumerate().map(|(i, x)| Ok((i, Into::<Arc<str>>::into(x.name.as_str()), ValueType::from_component(&x.ty, component, resource_map)?))).collect::<Result<Arc<_>>>()?;
-        Arc::get_mut(&mut to_sort).expect("Could not get exclusive reference.").sort_by(|a, b| a.1.cmp(&b.1));
+    fn from_component(
+        ty: &wit_parser::Record,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
+        let mut to_sort = ty
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, x)| {
+                Ok((
+                    i,
+                    Into::<Arc<str>>::into(x.name.as_str()),
+                    ValueType::from_component(&x.ty, component, resource_map)?,
+                ))
+            })
+            .collect::<Result<Arc<_>>>()?;
+        Arc::get_mut(&mut to_sort)
+            .expect("Could not get exclusive reference.")
+            .sort_by(|a, b| a.1.cmp(&b.1));
 
         for pair in to_sort.windows(2) {
             ensure!(pair[0].0 != pair[1].0, "Duplicate field names");
@@ -140,20 +216,30 @@ impl RecordType {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TupleType {
-    fields: Arc<[ValueType]>
+    fields: Arc<[ValueType]>,
 }
 
 impl TupleType {
     pub fn new(fields: impl IntoIterator<Item = ValueType>) -> Self {
-        Self { fields: fields.into_iter().collect() }
+        Self {
+            fields: fields.into_iter().collect(),
+        }
     }
 
     pub fn fields(&self) -> &[ValueType] {
         &self.fields
     }
 
-    fn from_component(ty: &wit_parser::Tuple, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
-        let fields = ty.types.iter().map(|x| ValueType::from_component(x, component, resource_map)).collect::<Result<_>>()?;
+    fn from_component(
+        ty: &wit_parser::Tuple,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
+        let fields = ty
+            .types
+            .iter()
+            .map(|x| ValueType::from_component(x, component, resource_map))
+            .collect::<Result<_>>()?;
         Ok(Self { fields })
     }
 }
@@ -161,7 +247,7 @@ impl TupleType {
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct VariantCase {
     name: Arc<str>,
-    ty: Option<ValueType>
+    ty: Option<ValueType>,
 }
 
 impl VariantCase {
@@ -176,7 +262,7 @@ impl VariantCase {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct VariantType {
-    cases: Arc<[VariantCase]>
+    cases: Arc<[VariantCase]>,
 }
 
 impl VariantType {
@@ -188,7 +274,7 @@ impl VariantType {
                 ensure!(cases[i].name() != cases[j].name(), "Duplicate case names.");
             }
         }
-        
+
         Ok(Self { cases })
     }
 
@@ -196,27 +282,48 @@ impl VariantType {
         &self.cases
     }
 
-    fn from_component(ty: &wit_parser::Variant, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
-        let cases: Arc<_> = ty.cases.iter().map(|x| Ok(VariantCase { name: x.name.as_str().into(), ty: match &x.ty { Some(t) => Some(ValueType::from_component(t, component, resource_map)?), None => None } })).collect::<Result<_>>()?;
+    fn from_component(
+        ty: &wit_parser::Variant,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
+        let cases: Arc<_> = ty
+            .cases
+            .iter()
+            .map(|x| {
+                Ok(VariantCase {
+                    name: x.name.as_str().into(),
+                    ty: match &x.ty {
+                        Some(t) => Some(ValueType::from_component(t, component, resource_map)?),
+                        None => None,
+                    },
+                })
+            })
+            .collect::<Result<_>>()?;
 
         for i in 0..cases.len() {
             for j in 0..i {
                 ensure!(cases[i].name() != cases[j].name(), "Duplicate case names.");
             }
         }
-        
+
         Ok(Self { cases })
     }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct EnumType {
-    cases: Arc<[Arc<str>]>
+    cases: Arc<[Arc<str>]>,
 }
 
 impl EnumType {
     pub fn new<S: Into<Arc<str>>>(cases: impl IntoIterator<Item = S>) -> Self {
-        Self { cases: cases.into_iter().map(|x| Into::<Arc<str>>::into(x)).collect() }
+        Self {
+            cases: cases
+                .into_iter()
+                .map(|x| Into::<Arc<str>>::into(x))
+                .collect(),
+        }
     }
 
     pub fn cases(&self) -> impl ExactSizeIterator<Item = &str> {
@@ -230,20 +337,30 @@ impl EnumType {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UnionType {
-    cases: Arc<[ValueType]>
+    cases: Arc<[ValueType]>,
 }
 
 impl UnionType {
     pub fn new(cases: impl IntoIterator<Item = ValueType>) -> Self {
-        Self { cases: cases.into_iter().collect() }
+        Self {
+            cases: cases.into_iter().collect(),
+        }
     }
 
     pub fn cases(&self) -> &[ValueType] {
         &self.cases
     }
 
-    fn from_component(ty: &wit_parser::Union, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
-        let cases = ty.cases.iter().map(|x| ValueType::from_component(&x.ty, component, resource_map)).collect::<Result<_>>()?;
+    fn from_component(
+        ty: &wit_parser::Union,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
+        let cases = ty
+            .cases
+            .iter()
+            .map(|x| ValueType::from_component(&x.ty, component, resource_map))
+            .collect::<Result<_>>()?;
 
         Ok(Self { cases })
     }
@@ -251,7 +368,7 @@ impl UnionType {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct OptionType {
-    ty: Arc<ValueType>
+    ty: Arc<ValueType>,
 }
 
 impl OptionType {
@@ -266,12 +383,14 @@ impl OptionType {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ResultType {
-    ok_err: Arc<(Option<ValueType>, Option<ValueType>)>
+    ok_err: Arc<(Option<ValueType>, Option<ValueType>)>,
 }
 
 impl ResultType {
     pub fn new(ok: Option<ValueType>, err: Option<ValueType>) -> Self {
-        Self { ok_err: Arc::new((ok, err)) }
+        Self {
+            ok_err: Arc::new((ok, err)),
+        }
     }
 
     pub fn ok_ty(&self) -> Option<ValueType> {
@@ -286,12 +405,15 @@ impl ResultType {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlagsType {
     names: Arc<[Arc<str>]>,
-    pub(crate) indices: Arc<FxHashMap<Arc<str>, usize>>
+    pub(crate) indices: Arc<FxHashMap<Arc<str>, usize>>,
 }
 
 impl FlagsType {
     pub fn new<S: Into<Arc<str>>>(names: impl IntoIterator<Item = S>) -> Result<Self> {
-        let names: Arc<_> = names.into_iter().map(|x| Into::<Arc<str>>::into(x)).collect();
+        let names: Arc<_> = names
+            .into_iter()
+            .map(|x| Into::<Arc<str>>::into(x))
+            .collect();
 
         for i in 0..names.len() {
             for j in 0..i {
@@ -299,8 +421,14 @@ impl FlagsType {
             }
         }
 
-        let indices = Arc::new(names.iter().enumerate().map(|(i, val)| (val.clone(), i)).collect());
-        
+        let indices = Arc::new(
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, val)| (val.clone(), i))
+                .collect(),
+        );
+
         Ok(Self { names, indices })
     }
 
@@ -321,7 +449,7 @@ impl Hash for FlagsType {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ResourceType {
-    kind: ResourceKindValue
+    kind: ResourceKindValue,
 }
 
 impl ResourceType {
@@ -330,38 +458,67 @@ impl ResourceType {
 
         let store_id = ctx.as_context().inner.data().id;
         let destructor = if let Some(destructor) = destructor {
-            ensure!(store_id == destructor.store_id, "Destructor was not created with the correct store.");
+            ensure!(
+                store_id == destructor.store_id,
+                "Destructor was not created with the correct store."
+            );
             let ty = destructor.ty();
-            ensure!(ty.results() == &[], "Destructor did not have the correct signature.");
-            ensure!(ty.params() == &[ValueType::S32], "Destructor did not have the correct signature.");
+            ensure!(
+                ty.results() == &[],
+                "Destructor did not have the correct signature."
+            );
+            ensure!(
+                ty.params() == &[ValueType::S32],
+                "Destructor did not have the correct signature."
+            );
 
-            Some(wasm_runtime_layer::Func::new(ctx.as_context_mut().inner, wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []), move |ctx, val, res| {
-                let wasm_runtime_layer::Value::I32(rep) = &val[0] else { bail!("Incorrect rep type.") };
-                destructor.call(crate::StoreContextMut { inner: ctx }, &[crate::values::Value::S32(*rep)], &mut [])
-            }))
-        }
-        else {
+            Some(wasm_runtime_layer::Func::new(
+                ctx.as_context_mut().inner,
+                wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []),
+                move |ctx, val, res| {
+                    let wasm_runtime_layer::Value::I32(rep) = &val[0] else { bail!("Incorrect rep type.") };
+                    destructor.call(
+                        crate::StoreContextMut { inner: ctx },
+                        &[crate::values::Value::S32(*rep)],
+                        &mut [],
+                    )
+                },
+            ))
+        } else {
             None
         };
 
-        Ok(Self { kind: ResourceKindValue::Host { store_id, resource_id: ID_COUNTER.fetch_add(1, Ordering::AcqRel), destructor } })
+        Ok(Self {
+            kind: ResourceKindValue::Host {
+                store_id,
+                resource_id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
+                destructor,
+            },
+        })
     }
 
     pub(crate) fn is_owned_by_instance(&self, instance: u64) -> bool {
         if let ResourceKindValue::Instantiated { instance: a, .. } = &self.kind {
             instance == *a
-        }
-        else {
+        } else {
             false
         }
     }
 
-    pub(crate) fn from_resolve(id: Id<wit_parser::TypeDef>, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
-        let ab = Self { kind: ResourceKindValue::Abstract { id: id.index(), component: component.id } };
+    pub(crate) fn from_resolve(
+        id: Id<wit_parser::TypeDef>,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
+        let ab = Self {
+            kind: ResourceKindValue::Abstract {
+                id: id.index(),
+                component: component.id,
+            },
+        };
         if let Some(map) = resource_map {
             Ok(map[&ab].clone())
-        }
-        else {
+        } else {
             Ok(ab)
         }
     }
@@ -369,17 +526,21 @@ impl ResourceType {
     pub(crate) fn host_destructor(&self) -> Option<Option<wasm_runtime_layer::Func>> {
         if let ResourceKindValue::Host { destructor, .. } = &self.kind {
             Some(destructor.clone())
-        }
-        else {
+        } else {
             None
         }
     }
 
     pub(crate) fn instantiate(&self, store_id: u64, instance: u64) -> Result<Self> {
         if let ResourceKindValue::Abstract { id, component } = &self.kind {
-            Ok(Self { kind: ResourceKindValue::Instantiated { id: *id, instance, store_id } })
-        }
-        else {
+            Ok(Self {
+                kind: ResourceKindValue::Instantiated {
+                    id: *id,
+                    instance,
+                    store_id,
+                },
+            })
+        } else {
             bail!("Resource was not abstract.");
         }
     }
@@ -387,7 +548,7 @@ impl ResourceType {
     pub(crate) fn is_instantiated(&self) -> bool {
         match &self.kind {
             ResourceKindValue::Abstract { .. } => false,
-            _ => true
+            _ => true,
         }
     }
 
@@ -402,18 +563,48 @@ impl ResourceType {
 
 #[derive(Clone, Debug)]
 enum ResourceKindValue {
-    Abstract { id: usize, component: u64 },
-    Instantiated { id: usize, instance: u64, store_id: u64 },
-    Host { store_id: u64, resource_id: u64, destructor: Option<wasm_runtime_layer::Func> }
+    Abstract {
+        id: usize,
+        component: u64,
+    },
+    Instantiated {
+        id: usize,
+        instance: u64,
+        store_id: u64,
+    },
+    Host {
+        store_id: u64,
+        resource_id: u64,
+        destructor: Option<wasm_runtime_layer::Func>,
+    },
 }
 
 impl PartialEq for ResourceKindValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (ResourceKindValue::Abstract { id: a, component: b }, ResourceKindValue::Abstract { id: x, component: y }) => a == x && b == y,
-            (ResourceKindValue::Instantiated { id: a, instance: b, .. }, ResourceKindValue::Instantiated { id: x, instance: y, .. }) => a == x && b == y,
-            (ResourceKindValue::Host { resource_id: a, .. }, ResourceKindValue::Host { resource_id: x, .. }) => a == x,
-            _ => false
+            (
+                ResourceKindValue::Abstract {
+                    id: a,
+                    component: b,
+                },
+                ResourceKindValue::Abstract {
+                    id: x,
+                    component: y,
+                },
+            ) => a == x && b == y,
+            (
+                ResourceKindValue::Instantiated {
+                    id: a, instance: b, ..
+                },
+                ResourceKindValue::Instantiated {
+                    id: x, instance: y, ..
+                },
+            ) => a == x && b == y,
+            (
+                ResourceKindValue::Host { resource_id: a, .. },
+                ResourceKindValue::Host { resource_id: x, .. },
+            ) => a == x,
+            _ => false,
         }
     }
 }
@@ -424,9 +615,23 @@ impl Hash for ResourceKindValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
         match self {
-            ResourceKindValue::Abstract { id, component } => { id.hash(state); component.hash(state); },
-            ResourceKindValue::Instantiated { id, instance, store_id } => { id.hash(state); instance.hash(state); },
-            ResourceKindValue::Host { store_id, resource_id, destructor } => resource_id.hash(state),
+            ResourceKindValue::Abstract { id, component } => {
+                id.hash(state);
+                component.hash(state);
+            }
+            ResourceKindValue::Instantiated {
+                id,
+                instance,
+                store_id,
+            } => {
+                id.hash(state);
+                instance.hash(state);
+            }
+            ResourceKindValue::Host {
+                store_id,
+                resource_id,
+                destructor,
+            } => resource_id.hash(state),
         }
     }
 }
@@ -462,11 +667,23 @@ impl std::fmt::Debug for FuncType {
 }
 
 impl FuncType {
-    pub(crate) fn from_component(func: &wit_parser::Function, component: &ComponentInner, resource_map: Option<&FxHashMap<ResourceType, ResourceType>>) -> Result<Self> {
-        let mut params_results = func.params.iter().map(|(_, ty)| ValueType::from_component(ty, component, resource_map)).collect::<Result<Vec<_>>>()?;
+    pub(crate) fn from_component(
+        func: &wit_parser::Function,
+        component: &ComponentInner,
+        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
+    ) -> Result<Self> {
+        let mut params_results = func
+            .params
+            .iter()
+            .map(|(_, ty)| ValueType::from_component(ty, component, resource_map))
+            .collect::<Result<Vec<_>>>()?;
         let len_params = params_results.len();
-        
-        for result in func.results.iter_types().map(|ty| ValueType::from_component(ty, component, resource_map)) {
+
+        for result in func
+            .results
+            .iter_types()
+            .map(|ty| ValueType::from_component(ty, component, resource_map))
+        {
             params_results.push(result?);
         }
 
@@ -551,7 +768,7 @@ impl ComponentList for () {
     const LEN: usize = 0;
 
     fn into_tys(types: &mut [ValueType]) {}
-    
+
     fn from_values(values: &[crate::values::Value]) -> Result<Self> {
         Ok(())
     }
@@ -593,14 +810,14 @@ macro_rules! impl_component_list {
 }
 
 impl_component_list!((A, a));
-impl_component_list!((A, a) (B, b));
-impl_component_list!((A, a) (B, b) (C, c));
-impl_component_list!((A, a) (B, b) (C, c) (D, d));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i) (J, j));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i) (J, j) (K, k));
-impl_component_list!((A, a) (B, b) (C, c) (D, d) (E, e) (F, f) (G, g) (H, h) (I, i) (J, j) (K, k) (L, l));
+impl_component_list!((A, a)(B, b));
+impl_component_list!((A, a)(B, b)(C, c));
+impl_component_list!((A, a)(B, b)(C, c)(D, d));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e)(F, f));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e)(F, f)(G, g));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e)(F, f)(G, g)(H, h));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e)(F, f)(G, g)(H, h)(I, i));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e)(F, f)(G, g)(H, h)(I, i)(J, j));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e)(F, f)(G, g)(H, h)(I, i)(J, j)(K, k));
+impl_component_list!((A, a)(B, b)(C, c)(D, d)(E, e)(F, f)(G, g)(H, h)(I, i)(J, j)(K, k)(L, l));

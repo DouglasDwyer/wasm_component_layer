@@ -8,32 +8,35 @@ mod require_matches;
 mod types;
 mod values;
 
+use std::collections::hash_map::*;
+use std::sync::atomic::*;
+use std::sync::*;
+
 use anyhow::*;
-pub use crate::func::*;
-pub use crate::identifier::*;
-use crate::require_matches::*;
-pub use crate::types::*;
-pub use crate::values::*;
 use fxhash::*;
 use id_arena::*;
 use ref_cast::*;
-use std::collections::hash_map::*;
-use std::sync::*;
-use std::sync::atomic::*;
 use vec_option::*;
+pub use wasm_runtime_layer::Engine;
 use wasm_runtime_layer::*;
 use wasmtime_environ::component::*;
 use wit_component::*;
 use wit_parser::*;
 
-pub use wasm_runtime_layer::Engine as Engine;
+pub use crate::func::*;
+pub use crate::identifier::*;
+use crate::require_matches::*;
+pub use crate::types::*;
+pub use crate::values::*;
 
 pub struct Component(Arc<ComponentInner>);
 
 impl Component {
     pub fn new<E: backend::WasmEngine>(engine: &Engine<E>, bytes: &[u8]) -> Result<Self> {
         let (inner, types) = Self::generate_component(engine, bytes)?;
-        Ok(Self(Arc::new(Self::generate_resources(Self::load_exports(Self::extract_initializers(inner, &types)?, &types)?)?)))
+        Ok(Self(Arc::new(Self::generate_resources(
+            Self::load_exports(Self::extract_initializers(inner, &types)?, &types)?,
+        )?)))
     }
 
     pub fn exports(&self) -> &ExportTypes {
@@ -44,62 +47,93 @@ impl Component {
         &self.0.import_types
     }
 
-    fn generate_component<E: backend::WasmEngine>(engine: &Engine<E>, bytes: &[u8]) -> Result<(ComponentInner, ComponentTypes)> {
+    fn generate_component<E: backend::WasmEngine>(
+        engine: &Engine<E>,
+        bytes: &[u8],
+    ) -> Result<(ComponentInner, ComponentTypes)> {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let decoded = wit_component::decode(bytes)
-        .context("Could not decode component information from bytes.")?;
+            .context("Could not decode component information from bytes.")?;
 
         let (resolve, world_id) = match decoded {
             DecodedWasm::WitPackage(..) => bail!("Cannot instantiate WIT package as module."),
-            DecodedWasm::Component(resolve, id) => (resolve, id)
+            DecodedWasm::Component(resolve, id) => (resolve, id),
         };
 
         let adapter_vec = wasmtime_environ::ScopeVec::new();
-        let (translation, module_data, component_types) = Self::translate_modules(bytes, &adapter_vec)?;
+        let (translation, module_data, component_types) =
+            Self::translate_modules(bytes, &adapter_vec)?;
 
         let export_mapping = Self::generate_export_mapping(&module_data);
-        let mut modules = FxHashMap::with_capacity_and_hasher(module_data.len(), Default::default());
+        let mut modules =
+            FxHashMap::with_capacity_and_hasher(module_data.len(), Default::default());
 
         for (id, module) in module_data {
-            modules.insert(id, ModuleTranslation { module: Module::new(engine, std::io::Cursor::new(module.wasm))?, translation: module.module });
+            modules.insert(
+                id,
+                ModuleTranslation {
+                    module: Module::new(engine, std::io::Cursor::new(module.wasm))?,
+                    translation: module.module,
+                },
+            );
         }
-        
+
         let mut size_align = SizeAlign::default();
         size_align.fill(&resolve);
 
-        let export_types = ExportTypes::new((&resolve.packages[resolve.worlds[world_id].package.context("No package associated with world.")?].name).into());
+        let export_types = ExportTypes::new(
+            (&resolve.packages[resolve.worlds[world_id]
+                .package
+                .context("No package associated with world.")?]
+            .name)
+                .into(),
+        );
 
         let package_identifiers = Self::generate_package_identifiers(&resolve)?;
-        let interface_identifiers = Self::generate_interface_identifiers(&resolve, &package_identifiers)?;
+        let interface_identifiers =
+            Self::generate_interface_identifiers(&resolve, &package_identifiers)?;
 
-        Ok((ComponentInner {
-            export_mapping,
-            export_names: FxHashMap::default(),
-            import_types: ImportTypes::new(),
-            export_types,
-            extracted_memories: FxHashMap::default(),
-            extracted_reallocs: FxHashMap::default(),
-            extracted_post_returns: FxHashMap::default(),
-            id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
-            generated_trampolines: FxHashMap::default(),
-            instance_modules: wasmtime_environ::PrimaryMap::default(),
-            interface_identifiers,
-            modules,
-            package_identifiers,
-            resource_map: vec!(TypeResourceTableIndex::from_u32(u32::MAX - 1); resolve.types.len()),
-            resolve,
-            size_align,
-            translation,
-            world_id
-        }, component_types))
+        Ok((
+            ComponentInner {
+                export_mapping,
+                export_names: FxHashMap::default(),
+                import_types: ImportTypes::new(),
+                export_types,
+                extracted_memories: FxHashMap::default(),
+                extracted_reallocs: FxHashMap::default(),
+                extracted_post_returns: FxHashMap::default(),
+                id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
+                generated_trampolines: FxHashMap::default(),
+                instance_modules: wasmtime_environ::PrimaryMap::default(),
+                interface_identifiers,
+                modules,
+                package_identifiers,
+                resource_map: vec![
+                    TypeResourceTableIndex::from_u32(u32::MAX - 1);
+                    resolve.types.len()
+                ],
+                resolve,
+                size_align,
+                translation,
+                world_id,
+            },
+            component_types,
+        ))
     }
 
-    fn generate_export_mapping(module_data: &wasmtime_environ::PrimaryMap<StaticModuleIndex, wasmtime_environ::ModuleTranslation>) -> FxHashMap<StaticModuleIndex, FxHashMap<wasmtime_environ::EntityIndex, String>> {
-        let mut export_mapping = FxHashMap::with_capacity_and_hasher(module_data.len(), Default::default());
+    fn generate_export_mapping(
+        module_data: &wasmtime_environ::PrimaryMap<
+            StaticModuleIndex,
+            wasmtime_environ::ModuleTranslation,
+        >,
+    ) -> FxHashMap<StaticModuleIndex, FxHashMap<wasmtime_environ::EntityIndex, String>> {
+        let mut export_mapping =
+            FxHashMap::with_capacity_and_hasher(module_data.len(), Default::default());
 
         for (idx, module) in module_data {
-            let entry: &mut FxHashMap<wasmtime_environ::EntityIndex, String> = export_mapping.entry(idx).or_default();
+            let entry: &mut FxHashMap<wasmtime_environ::EntityIndex, String> =
+                export_mapping.entry(idx).or_default();
             for (name, index) in module.module.exports.clone() {
                 entry.insert(index, name);
             }
@@ -114,19 +148,37 @@ impl Component {
                 WorldItem::Type(x) => {
                     if inner.resolve.types[*x].kind == TypeDefKind::Resource {
                         if let Some(name) = &inner.resolve.types[*x].name {
-                            ensure!(inner.import_types.root.resources.insert(name.as_str().into(), ResourceType::from_resolve(*x, &inner, None)?).is_none(), "Duplicate resource import.");
+                            ensure!(
+                                inner
+                                    .import_types
+                                    .root
+                                    .resources
+                                    .insert(
+                                        name.as_str().into(),
+                                        ResourceType::from_resolve(*x, &inner, None)?
+                                    )
+                                    .is_none(),
+                                "Duplicate resource import."
+                            );
                         }
                     }
-                },
+                }
                 WorldItem::Interface(x) => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
                             let ty = ResourceType::from_resolve(*ty, &inner, None)?;
-                            let entry = inner.import_types.instances.entry(inner.interface_identifiers[x.index()].clone()).or_insert_with(ImportTypesInstance::new);
-                            ensure!(entry.resources.insert(name.as_str().into(), ty).is_none(), "Duplicate resource import.");
+                            let entry = inner
+                                .import_types
+                                .instances
+                                .entry(inner.interface_identifiers[x.index()].clone())
+                                .or_insert_with(ImportTypesInstance::new);
+                            ensure!(
+                                entry.resources.insert(name.as_str().into(), ty).is_none(),
+                                "Duplicate resource import."
+                            );
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -136,19 +188,37 @@ impl Component {
                 WorldItem::Type(x) => {
                     if inner.resolve.types[*x].kind == TypeDefKind::Resource {
                         if let Some(name) = &inner.resolve.types[*x].name {
-                            ensure!(inner.export_types.root.resources.insert(name.as_str().into(), ResourceType::from_resolve(*x, &inner, None)?).is_none(), "Duplicate resource export.");
+                            ensure!(
+                                inner
+                                    .export_types
+                                    .root
+                                    .resources
+                                    .insert(
+                                        name.as_str().into(),
+                                        ResourceType::from_resolve(*x, &inner, None)?
+                                    )
+                                    .is_none(),
+                                "Duplicate resource export."
+                            );
                         }
                     }
-                },
+                }
                 WorldItem::Interface(x) => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
                             let ty = ResourceType::from_resolve(*ty, &inner, None)?;
-                            let entry = inner.export_types.instances.entry(inner.interface_identifiers[x.index()].clone()).or_insert_with(ExportTypesInstance::new);
-                            ensure!(entry.resources.insert(name.as_str().into(), ty).is_none(), "Duplicate resource export.");
+                            let entry = inner
+                                .export_types
+                                .instances
+                                .entry(inner.interface_identifiers[x.index()].clone())
+                                .or_insert_with(ExportTypesInstance::new);
+                            ensure!(
+                                entry.resources.insert(name.as_str().into(), ty).is_none(),
+                                "Duplicate resource export."
+                            );
                         }
                     }
-                },
+                }
                 _ => {}
             }
         }
@@ -166,19 +236,36 @@ impl Component {
         Ok(res)
     }
 
-    fn generate_interface_identifiers(resolve: &Resolve, packages: &[PackageIdentifier]) -> Result<Vec<InterfaceIdentifier>> {
+    fn generate_interface_identifiers(
+        resolve: &Resolve,
+        packages: &[PackageIdentifier],
+    ) -> Result<Vec<InterfaceIdentifier>> {
         let mut res = Vec::with_capacity(resolve.interfaces.len());
 
         for (_, iface) in &resolve.interfaces {
-            let pkg = iface.package.context("Interface did not have associated package.")?;
-            res.push(InterfaceIdentifier::new(packages[pkg.index()].clone(), iface.name.as_deref().context("Exported interface did not have valid name.")?));
+            let pkg = iface
+                .package
+                .context("Interface did not have associated package.")?;
+            res.push(InterfaceIdentifier::new(
+                packages[pkg.index()].clone(),
+                iface
+                    .name
+                    .as_deref()
+                    .context("Exported interface did not have valid name.")?,
+            ));
         }
 
         Ok(res)
     }
 
-    fn extract_initializers(mut inner: ComponentInner, types: &ComponentTypes) -> Result<ComponentInner> {
-        let lowering_options = Self::get_lowering_options_and_extract_trampolines(&inner.translation.trampolines, &mut inner.generated_trampolines)?;
+    fn extract_initializers(
+        mut inner: ComponentInner,
+        types: &ComponentTypes,
+    ) -> Result<ComponentInner> {
+        let lowering_options = Self::get_lowering_options_and_extract_trampolines(
+            &inner.translation.trampolines,
+            &mut inner.generated_trampolines,
+        )?;
         let mut imports = FxHashMap::default();
         for (key, _) in &inner.resolve.worlds[inner.world_id].imports {
             let name = inner.resolve.name_world_key(key);
@@ -193,26 +280,42 @@ impl Component {
             match initializer {
                 GlobalInitializer::InstantiateModule(InstantiateModule::Static(idx, def)) => {
                     inner.instance_modules.push(*idx);
-                },
+                }
                 GlobalInitializer::ExtractMemory(ExtractMemory { index, export }) => {
-                    ensure!(inner.extracted_memories.insert(*index, export.clone()).is_none(), "Extracted the same memory more than once.");
-                },
+                    ensure!(
+                        inner
+                            .extracted_memories
+                            .insert(*index, export.clone())
+                            .is_none(),
+                        "Extracted the same memory more than once."
+                    );
+                }
                 GlobalInitializer::ExtractRealloc(ExtractRealloc { index, def }) => {
                     if let CoreDef::Export(export) = def {
-                        ensure!(inner.extracted_reallocs.insert(*index, export.clone()).is_none(), "Extracted the same memory more than once.");
-                    }
-                    else {
+                        ensure!(
+                            inner
+                                .extracted_reallocs
+                                .insert(*index, export.clone())
+                                .is_none(),
+                            "Extracted the same memory more than once."
+                        );
+                    } else {
                         bail!("Unexpected post return definition type.");
                     }
-                },
+                }
                 GlobalInitializer::ExtractPostReturn(ExtractPostReturn { index, def }) => {
                     if let CoreDef::Export(export) = def {
-                        ensure!(inner.extracted_post_returns.insert(*index, export.clone()).is_none(), "Extracted the same memory more than once.");
-                    }
-                    else {
+                        ensure!(
+                            inner
+                                .extracted_post_returns
+                                .insert(*index, export.clone())
+                                .is_none(),
+                            "Extracted the same memory more than once."
+                        );
+                    } else {
                         bail!("Unexpected post return definition type.");
                     }
-                },
+                }
                 GlobalInitializer::LowerImport { index, import } => {
                     let (idx, lowering_opts, index_ty) = lowering_options[*index];
                     let (import_index, path) = &inner.translation.component.imports[*import];
@@ -226,7 +329,7 @@ impl Component {
                                 instance: None,
                                 name: import_name.as_str().into(),
                                 func: func.clone(),
-                                options: lowering_opts.clone()
+                                options: lowering_opts.clone(),
                             }
                         }
                         WorldItem::Interface(i) => {
@@ -238,7 +341,7 @@ impl Component {
                                 instance: Some(inner.interface_identifiers[i.index()].clone()),
                                 name: path[0].as_str().into(),
                                 func: func.clone(),
-                                options: lowering_opts.clone()
+                                options: lowering_opts.clone(),
                             }
                         }
                         WorldItem::Type(_) => unreachable!(),
@@ -246,31 +349,56 @@ impl Component {
 
                     let ty = crate::types::FuncType::from_component(&imp.func, &inner, None)?;
                     let inst = if let Some(inst) = &imp.instance {
-                        inner.import_types.instances.entry(inst.clone()).or_insert_with(ImportTypesInstance::new)
-                    }
-                    else {
+                        inner
+                            .import_types
+                            .instances
+                            .entry(inst.clone())
+                            .or_insert_with(ImportTypesInstance::new)
+                    } else {
                         &mut inner.import_types.root
                     };
 
-                    Self::update_resource_map(&inner.resolve, types, &imp.func, index_ty, &mut inner.resource_map);
+                    Self::update_resource_map(
+                        &inner.resolve,
+                        types,
+                        &imp.func,
+                        index_ty,
+                        &mut inner.resource_map,
+                    );
 
-                    ensure!(inst.functions.insert(imp.name.clone(), ty).is_none(), "Attempted to insert duplicate import.");
+                    ensure!(
+                        inst.functions.insert(imp.name.clone(), ty).is_none(),
+                        "Attempted to insert duplicate import."
+                    );
 
-                    ensure!(inner.generated_trampolines.insert(idx, GeneratedTrampoline::ImportedFunction(imp)).is_none(), "Attempted to insert duplicate import.");
-                },
+                    ensure!(
+                        inner
+                            .generated_trampolines
+                            .insert(idx, GeneratedTrampoline::ImportedFunction(imp))
+                            .is_none(),
+                        "Attempted to insert duplicate import."
+                    );
+                }
                 GlobalInitializer::Resource(x) => {
                     if let Some(destructor) = x.dtor.clone() {
-                        ensure!(destructors.insert(x.index, destructor).is_none(), "Attempted to define duplicate resource.");
+                        ensure!(
+                            destructors.insert(x.index, destructor).is_none(),
+                            "Attempted to define duplicate resource."
+                        );
                     }
                 }
-                _ => bail!("Not yet implemented {initializer:?}.")
+                _ => bail!("Not yet implemented {initializer:?}."),
             }
         }
 
         for (_, trampoline) in &mut inner.generated_trampolines {
             if let GeneratedTrampoline::ResourceDrop(x, destructor) = trampoline {
                 let resource = &types[*x];
-                if let Some(resource_idx) = inner.translation.component.defined_resource_index(resource.ty) {
+                if let Some(resource_idx) = inner
+                    .translation
+                    .component
+                    .defined_resource_index(resource.ty)
+                {
                     *destructor = destructors.remove(&resource_idx);
                 }
             }
@@ -279,21 +407,49 @@ impl Component {
         Ok(inner)
     }
 
-    fn get_lowering_options_and_extract_trampolines<'a>(trampolines: &'a wasmtime_environ::PrimaryMap<TrampolineIndex, Trampoline>, output_trampolines: &mut FxHashMap<TrampolineIndex, GeneratedTrampoline>) -> Result<wasmtime_environ::PrimaryMap<LoweredIndex, (TrampolineIndex, &'a CanonicalOptions, TypeFuncIndex)>> {
+    fn get_lowering_options_and_extract_trampolines<'a>(
+        trampolines: &'a wasmtime_environ::PrimaryMap<TrampolineIndex, Trampoline>,
+        output_trampolines: &mut FxHashMap<TrampolineIndex, GeneratedTrampoline>,
+    ) -> Result<
+        wasmtime_environ::PrimaryMap<
+            LoweredIndex,
+            (TrampolineIndex, &'a CanonicalOptions, TypeFuncIndex),
+        >,
+    > {
         let mut lowers = wasmtime_environ::PrimaryMap::default();
         for (idx, trampoline) in trampolines {
             match trampoline {
-                Trampoline::LowerImport { index, lower_ty, options } => assert!(lowers.push((idx, options, *lower_ty)) == *index, "Indices did not match."),
-                Trampoline::ResourceNew(x) => { output_trampolines.insert(idx, GeneratedTrampoline::ResourceNew(*x)); },
-                Trampoline::ResourceRep(x) => { output_trampolines.insert(idx, GeneratedTrampoline::ResourceRep(*x)); },
-                Trampoline::ResourceDrop(x) => { output_trampolines.insert(idx, GeneratedTrampoline::ResourceDrop(*x, None)); },
-                _ => bail!("Trampoline not implemented.")
+                Trampoline::LowerImport {
+                    index,
+                    lower_ty,
+                    options,
+                } => assert!(
+                    lowers.push((idx, options, *lower_ty)) == *index,
+                    "Indices did not match."
+                ),
+                Trampoline::ResourceNew(x) => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceNew(*x));
+                }
+                Trampoline::ResourceRep(x) => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceRep(*x));
+                }
+                Trampoline::ResourceDrop(x) => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceDrop(*x, None));
+                }
+                _ => bail!("Trampoline not implemented."),
             }
         }
         Ok(lowers)
     }
 
-    fn translate_modules<'a>(bytes: &'a [u8], scope: &'a wasmtime_environ::ScopeVec<u8>) -> Result<(ComponentTranslation, wasmtime_environ::PrimaryMap<StaticModuleIndex, wasmtime_environ::ModuleTranslation<'a>>, ComponentTypes)> {
+    fn translate_modules<'a>(
+        bytes: &'a [u8],
+        scope: &'a wasmtime_environ::ScopeVec<u8>,
+    ) -> Result<(
+        ComponentTranslation,
+        wasmtime_environ::PrimaryMap<StaticModuleIndex, wasmtime_environ::ModuleTranslation<'a>>,
+        ComponentTypes,
+    )> {
         let tunables = wasmtime_environ::Tunables::default();
         let mut types = ComponentTypesBuilder::default();
         let mut validator = Self::create_component_validator();
@@ -312,24 +468,40 @@ impl Component {
             let world_key = &inner.export_names[export_name];
             let item = &inner.resolve.worlds[inner.world_id].exports[world_key];
             match export {
-                wasmtime_environ::component::Export::LiftedFunction {
-                    ty,
-                    func,
-                    options,
-                } => {
+                wasmtime_environ::component::Export::LiftedFunction { ty, func, options } => {
                     let f = match item {
                         WorldItem::Function(f) => f,
                         WorldItem::Interface(_) | WorldItem::Type(_) => unreachable!(),
                     };
 
-                    Self::update_resource_map(&inner.resolve, types, f, *ty, &mut inner.resource_map);
+                    Self::update_resource_map(
+                        &inner.resolve,
+                        types,
+                        f,
+                        *ty,
+                        &mut inner.resource_map,
+                    );
 
-                    ensure!(inner.export_types.root.functions.insert(export_name.as_str().into(), ComponentExport {
-                        options: options.clone(),
-                        def: match func { CoreDef::Export(x) => x.clone(), _ => unreachable!() },
-                        func: f.clone(),
-                        ty: crate::types::FuncType::from_component(f, &inner, None)?
-                    }).is_none(), "Duplicate function definition.");
+                    ensure!(
+                        inner
+                            .export_types
+                            .root
+                            .functions
+                            .insert(
+                                export_name.as_str().into(),
+                                ComponentExport {
+                                    options: options.clone(),
+                                    def: match func {
+                                        CoreDef::Export(x) => x.clone(),
+                                        _ => unreachable!(),
+                                    },
+                                    func: f.clone(),
+                                    ty: crate::types::FuncType::from_component(f, &inner, None)?
+                                }
+                            )
+                            .is_none(),
+                        "Duplicate function definition."
+                    );
                 }
                 wasmtime_environ::component::Export::Instance(iface) => {
                     let id = match item {
@@ -338,16 +510,44 @@ impl Component {
                     };
                     for (func_name, export) in iface {
                         let (func, options, ty) = match export {
-                            wasmtime_environ::component::Export::LiftedFunction { func, options, ty } => (func, options, ty),
+                            wasmtime_environ::component::Export::LiftedFunction {
+                                func,
+                                options,
+                                ty,
+                            } => (func, options, ty),
                             wasmtime_environ::component::Export::Type(_) => continue, // ignored
                             _ => unreachable!(),
                         };
 
                         let f = &inner.resolve.interfaces[id].functions[func_name];
-    
-                        Self::update_resource_map(&inner.resolve, types, f, *ty, &mut inner.resource_map);
-                        let exp = ComponentExport { options: options.clone(), def: match func { CoreDef::Export(x) => x.clone(), _ => unreachable!() }, func: f.clone(), ty: crate::types::FuncType::from_component(f, &inner, None)? };
-                        ensure!(inner.export_types.instances.entry(inner.interface_identifiers[id.index()].clone()).or_insert_with(ExportTypesInstance::new).functions.insert(func_name.as_str().into(), exp).is_none(), "Duplicate function definition.");
+
+                        Self::update_resource_map(
+                            &inner.resolve,
+                            types,
+                            f,
+                            *ty,
+                            &mut inner.resource_map,
+                        );
+                        let exp = ComponentExport {
+                            options: options.clone(),
+                            def: match func {
+                                CoreDef::Export(x) => x.clone(),
+                                _ => unreachable!(),
+                            },
+                            func: f.clone(),
+                            ty: crate::types::FuncType::from_component(f, &inner, None)?,
+                        };
+                        ensure!(
+                            inner
+                                .export_types
+                                .instances
+                                .entry(inner.interface_identifiers[id.index()].clone())
+                                .or_insert_with(ExportTypesInstance::new)
+                                .functions
+                                .insert(func_name.as_str().into(), exp)
+                                .is_none(),
+                            "Duplicate function definition."
+                        );
                     }
                 }
 
@@ -355,8 +555,12 @@ impl Component {
                 wasmtime_environ::component::Export::Type(_) => {}
 
                 // This can't be tested at this time so leave it unimplemented
-                wasmtime_environ::component::Export::ModuleStatic(_) => bail!("Not yet implemented."),
-                wasmtime_environ::component::Export::ModuleImport(_) => bail!("Not yet implemented."),
+                wasmtime_environ::component::Export::ModuleStatic(_) => {
+                    bail!("Not yet implemented.")
+                }
+                wasmtime_environ::component::Export::ModuleImport(_) => {
+                    bail!("Not yet implemented.")
+                }
             }
         }
 
@@ -373,7 +577,13 @@ impl Component {
         inner.export_names = exports;
     }
 
-    fn update_resource_map(resolve: &Resolve, types: &wasmtime_environ::component::ComponentTypes, func: &Function, ty_func_idx: TypeFuncIndex, map: &mut Vec<TypeResourceTableIndex>) {
+    fn update_resource_map(
+        resolve: &Resolve,
+        types: &wasmtime_environ::component::ComponentTypes,
+        func: &Function,
+        ty_func_idx: TypeFuncIndex,
+        map: &mut Vec<TypeResourceTableIndex>,
+    ) {
         let params_ty = &types[types[ty_func_idx].params];
         for ((_, ty), iface_ty) in func.params.iter().zip(params_ty.types.iter()) {
             Self::connect_resources(resolve, types, ty, iface_ty, map);
@@ -384,7 +594,13 @@ impl Component {
         }
     }
 
-    fn connect_resources(resolve: &Resolve, types: &wasmtime_environ::component::ComponentTypes, ty: &Type, iface_ty: &InterfaceType, map: &mut Vec<TypeResourceTableIndex>) {
+    fn connect_resources(
+        resolve: &Resolve,
+        types: &wasmtime_environ::component::ComponentTypes,
+        ty: &Type,
+        iface_ty: &InterfaceType,
+        map: &mut Vec<TypeResourceTableIndex>,
+    ) {
         let Type::Id(id) = ty else { return };
         match (&resolve.types[*id].kind, iface_ty) {
             (TypeDefKind::Flags(_), InterfaceType::Flags(_))
@@ -446,38 +662,43 @@ impl Component {
     }
 
     fn create_component_validator() -> wasmtime_environ::wasmparser::Validator {
-        wasmtime_environ::wasmparser::Validator::new_with_features(wasmtime_environ::wasmparser::WasmFeatures {
-            relaxed_simd: true,
-            threads: true,
-            multi_memory: true,
-            exceptions: true,
-            memory64: true,
-            extended_const: true,
-            component_model: true,
-            function_references: true,
-            memory_control: true,
-            gc: true,
-            component_model_values: true,
-            mutable_global: true,
-            saturating_float_to_int: true,
-            sign_extension: true,
-            bulk_memory: true,
-            multi_value: true,
-            reference_types: true,
-            tail_call: true,
-            simd: true,
-            floats: true,
-        })
+        wasmtime_environ::wasmparser::Validator::new_with_features(
+            wasmtime_environ::wasmparser::WasmFeatures {
+                relaxed_simd: true,
+                threads: true,
+                multi_memory: true,
+                exceptions: true,
+                memory64: true,
+                extended_const: true,
+                component_model: true,
+                function_references: true,
+                memory_control: true,
+                gc: true,
+                component_model_values: true,
+                mutable_global: true,
+                saturating_float_to_int: true,
+                sign_extension: true,
+                bulk_memory: true,
+                multi_value: true,
+                reference_types: true,
+                tail_call: true,
+                simd: true,
+                floats: true,
+            },
+        )
     }
 }
 
 struct ComponentInner {
-    pub export_mapping: FxHashMap<StaticModuleIndex, FxHashMap<wasmtime_environ::EntityIndex, String>>,
+    pub export_mapping:
+        FxHashMap<StaticModuleIndex, FxHashMap<wasmtime_environ::EntityIndex, String>>,
     pub export_names: FxHashMap<String, WorldKey>,
     pub export_types: ExportTypes,
     pub extracted_memories: FxHashMap<RuntimeMemoryIndex, CoreExport<MemoryIndex>>,
-    pub extracted_reallocs: FxHashMap<RuntimeReallocIndex, CoreExport<wasmtime_environ::EntityIndex>>,
-    pub extracted_post_returns: FxHashMap<RuntimePostReturnIndex, CoreExport<wasmtime_environ::EntityIndex>>,
+    pub extracted_reallocs:
+        FxHashMap<RuntimeReallocIndex, CoreExport<wasmtime_environ::EntityIndex>>,
+    pub extracted_post_returns:
+        FxHashMap<RuntimePostReturnIndex, CoreExport<wasmtime_environ::EntityIndex>>,
     pub resource_map: Vec<TypeResourceTableIndex>,
     pub generated_trampolines: FxHashMap<TrampolineIndex, GeneratedTrampoline>,
     pub id: u64,
@@ -489,7 +710,7 @@ struct ComponentInner {
     pub resolve: Resolve,
     pub size_align: SizeAlign,
     pub translation: ComponentTranslation,
-    pub world_id: Id<World>
+    pub world_id: Id<World>,
 }
 
 impl std::fmt::Debug for ComponentInner {
@@ -500,19 +721,23 @@ impl std::fmt::Debug for ComponentInner {
 
 struct ModuleTranslation {
     pub module: Module,
-    pub translation: wasmtime_environ::Module
+    pub translation: wasmtime_environ::Module,
 }
 
 #[derive(Debug)]
 pub struct ExportTypes {
     root: ExportTypesInstance,
     instances: FxHashMap<InterfaceIdentifier, ExportTypesInstance>,
-    package: PackageIdentifier
+    package: PackageIdentifier,
 }
 
 impl ExportTypes {
     pub(crate) fn new(package: PackageIdentifier) -> Self {
-        Self { root: ExportTypesInstance::new(), instances: FxHashMap::default(), package }
+        Self {
+            root: ExportTypesInstance::new(),
+            instances: FxHashMap::default(),
+            package,
+        }
     }
 
     pub fn root(&self) -> &ExportTypesInstance {
@@ -527,7 +752,9 @@ impl ExportTypes {
         self.instances.get(name)
     }
 
-    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportTypesInstance)> {
+    pub fn instances<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportTypesInstance)> {
         self.instances.iter()
     }
 }
@@ -535,12 +762,15 @@ impl ExportTypes {
 #[derive(Debug)]
 pub struct ExportTypesInstance {
     functions: FxHashMap<Arc<str>, ComponentExport>,
-    resources: FxHashMap<Arc<str>, ResourceType>
+    resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
 impl ExportTypesInstance {
     pub(crate) fn new() -> Self {
-        Self { functions: FxHashMap::default(), resources: FxHashMap::default() }
+        Self {
+            functions: FxHashMap::default(),
+            resources: FxHashMap::default(),
+        }
     }
 
     pub fn func(&self, name: impl AsRef<str>) -> Option<crate::types::FuncType> {
@@ -563,12 +793,15 @@ impl ExportTypesInstance {
 #[derive(Debug)]
 pub struct ImportTypes {
     root: ImportTypesInstance,
-    instances: FxHashMap<InterfaceIdentifier, ImportTypesInstance>
+    instances: FxHashMap<InterfaceIdentifier, ImportTypesInstance>,
 }
 
 impl ImportTypes {
     pub(crate) fn new() -> Self {
-        Self { root: ImportTypesInstance::new(), instances: FxHashMap::default() }
+        Self {
+            root: ImportTypesInstance::new(),
+            instances: FxHashMap::default(),
+        }
     }
 
     pub fn root(&self) -> &ImportTypesInstance {
@@ -579,7 +812,9 @@ impl ImportTypes {
         self.instances.get(name)
     }
 
-    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ImportTypesInstance)> {
+    pub fn instances<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ImportTypesInstance)> {
         self.instances.iter()
     }
 }
@@ -587,12 +822,15 @@ impl ImportTypes {
 #[derive(Debug)]
 pub struct ImportTypesInstance {
     functions: FxHashMap<Arc<str>, crate::types::FuncType>,
-    resources: FxHashMap<Arc<str>, ResourceType>
+    resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
 impl ImportTypesInstance {
     pub(crate) fn new() -> Self {
-        Self { functions: FxHashMap::default(), resources: FxHashMap::default() }
+        Self {
+            functions: FxHashMap::default(),
+            resources: FxHashMap::default(),
+        }
     }
 
     pub fn func(&self, name: impl AsRef<str>) -> Option<crate::types::FuncType> {
@@ -615,7 +853,7 @@ impl ImportTypesInstance {
 #[derive(Clone, Debug, Default)]
 pub struct Linker {
     root: LinkerInstance,
-    instances: FxHashMap<InterfaceIdentifier, LinkerInstance>
+    instances: FxHashMap<InterfaceIdentifier, LinkerInstance>,
 }
 
 impl Linker {
@@ -630,8 +868,7 @@ impl Linker {
     pub fn define_instance(&mut self, name: InterfaceIdentifier) -> Result<&mut LinkerInstance> {
         if self.instance(&name).is_none() {
             Ok(self.instances.entry(name).or_default())
-        }
-        else {
+        } else {
             bail!("Duplicate instance definition.");
         }
     }
@@ -652,11 +889,15 @@ impl Linker {
 #[derive(Clone, Debug, Default)]
 pub struct LinkerInstance {
     functions: FxHashMap<Arc<str>, crate::func::Func>,
-    resources: FxHashMap<Arc<str>, ResourceType>
+    resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
 impl LinkerInstance {
-    pub fn define_func(&mut self, name: impl Into<Arc<str>>, func: crate::func::Func) -> Result<()> {
+    pub fn define_func(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        func: crate::func::Func,
+    ) -> Result<()> {
         let n = Into::<Arc<str>>::into(name);
         if self.functions.contains_key(&n) {
             bail!("Duplicate function definition.");
@@ -670,8 +911,15 @@ impl LinkerInstance {
         self.functions.get(name.as_ref()).cloned()
     }
 
-    pub fn define_resource(&mut self, name: impl Into<Arc<str>>, resource_ty: ResourceType) -> Result<()> {
-        ensure!(resource_ty.is_instantiated(), "Cannot link with abstract resource type.");
+    pub fn define_resource(
+        &mut self,
+        name: impl Into<Arc<str>>,
+        resource_ty: ResourceType,
+    ) -> Result<()> {
+        ensure!(
+            resource_ty.is_instantiated(),
+            "Cannot link with abstract resource type."
+        );
 
         let n = Into::<Arc<str>>::into(name);
         if self.resources.contains_key(&n) {
@@ -691,19 +939,45 @@ impl LinkerInstance {
 pub struct Instance(Arc<InstanceInner>);
 
 impl Instance {
-    pub(crate) fn new(mut ctx: impl AsContextMut, component: &Component, linker: &Linker) -> Result<Self> {
+    pub(crate) fn new(
+        mut ctx: impl AsContextMut,
+        component: &Component,
+        linker: &Linker,
+    ) -> Result<Self> {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
         for i in 0..component.0.instance_modules.len() {
-            instance_flags.push(Global::new(ctx.as_context_mut().inner, wasm_runtime_layer::Value::I32(wasmtime_environ::component::FLAG_MAY_LEAVE | wasmtime_environ::component::FLAG_MAY_ENTER), true));
+            instance_flags.push(Global::new(
+                ctx.as_context_mut().inner,
+                wasm_runtime_layer::Value::I32(
+                    wasmtime_environ::component::FLAG_MAY_LEAVE
+                        | wasmtime_environ::component::FLAG_MAY_ENTER,
+                ),
+                true,
+            ));
         }
 
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(&ctx, id, component, linker)?;
         let types = Self::generate_types(&ctx, id, component, linker, &map)?;
-        let resource_tables = Arc::new(Mutex::new(vec!(HandleTable::default(); component.0.translation.component.num_resource_tables)));
-        let instance = InstanceInner { component: component.0.clone(), exports: Exports::new(component.exports().package().clone()), id, instances: Default::default(), instance_flags, resource_tables, types };
+        let resource_tables = Arc::new(Mutex::new(vec![
+            HandleTable::default();
+            component
+                .0
+                .translation
+                .component
+                .num_resource_tables
+        ]));
+        let instance = InstanceInner {
+            component: component.0.clone(),
+            exports: Exports::new(component.exports().package().clone()),
+            id,
+            instances: Default::default(),
+            instance_flags,
+            resource_tables,
+            types,
+        };
         let initialized = Self::global_initialize(instance, &mut ctx, linker, &map)?;
         let exported = Self::load_exports(initialized, &ctx, &map)?;
         Ok(Self(Arc::new(exported)))
@@ -716,38 +990,70 @@ impl Instance {
     pub fn exports(&self) -> &Exports {
         &self.0.exports
     }
-    
-    fn generate_types(ctx: impl AsContext, instance_id: u64, component: &Component, linker: &Linker, map: &FxHashMap<ResourceType, ResourceType>) -> Result<Arc<[crate::types::ValueType]>> {
+
+    fn generate_types(
+        ctx: impl AsContext,
+        instance_id: u64,
+        component: &Component,
+        linker: &Linker,
+        map: &FxHashMap<ResourceType, ResourceType>,
+    ) -> Result<Arc<[crate::types::ValueType]>> {
         let mut types = Vec::with_capacity(component.0.resolve.types.len());
         for (id, val) in &component.0.resolve.types {
-            assert!(types.len() == id.index(), "Type definition IDs were not equal.");
+            assert!(
+                types.len() == id.index(),
+                "Type definition IDs were not equal."
+            );
             if val.kind == TypeDefKind::Resource {
                 types.push(crate::types::ValueType::Bool);
-            }
-            else {
-                types.push(crate::types::ValueType::from_component_typedef(id, &component.0, Some(&map))?);
+            } else {
+                types.push(crate::types::ValueType::from_component_typedef(
+                    id,
+                    &component.0,
+                    Some(&map),
+                )?);
             }
         }
         Ok(types.into())
     }
 
-    fn create_resource_instantiation_map(ctx: impl AsContext, instance_id: u64, component: &Component, linker: &Linker) -> Result<FxHashMap<ResourceType, ResourceType>> {
+    fn create_resource_instantiation_map(
+        ctx: impl AsContext,
+        instance_id: u64,
+        component: &Component,
+        linker: &Linker,
+    ) -> Result<FxHashMap<ResourceType, ResourceType>> {
         let store_id = ctx.as_context().inner.data().id;
         let mut types = FxHashMap::default();
 
         for (name, resource) in component.imports().root().resources() {
-            let instantiated = linker.root().resource(name).ok_or_else(|| Error::msg(format!("Could not find resource {name} in linker.")))?;
+            let instantiated = linker
+                .root()
+                .resource(name)
+                .ok_or_else(|| Error::msg(format!("Could not find resource {name} in linker.")))?;
             types.insert(resource, instantiated);
         }
-        
+
         for (id, interface) in component.imports().instances() {
             for (name, resource) in interface.resources() {
-                let instantiated = linker.instance(id).and_then(|x| x.resource(name)).ok_or_else(|| Error::msg(format!("Could not find resource {name} from interface {id:?} in linker.")))?;
+                let instantiated = linker
+                    .instance(id)
+                    .and_then(|x| x.resource(name))
+                    .ok_or_else(|| {
+                        Error::msg(format!(
+                            "Could not find resource {name} from interface {id:?} in linker."
+                        ))
+                    })?;
                 types.insert(resource, instantiated);
             }
         }
 
-        for (_, resource) in component.exports().instances().flat_map(|(_, x)| x.resources()).chain(component.exports().root().resources()) {
+        for (_, resource) in component
+            .exports()
+            .instances()
+            .flat_map(|(_, x)| x.resources())
+            .chain(component.exports().root().resources())
+        {
             let instantiated = resource.instantiate(store_id, instance_id)?;
             types.insert(resource, instantiated);
         }
@@ -755,38 +1061,80 @@ impl Instance {
         Ok(types)
     }
 
-    fn load_exports(mut inner: InstanceInner, ctx: impl AsContext, map: &FxHashMap<ResourceType, ResourceType>) -> Result<InstanceInner> {
+    fn load_exports(
+        mut inner: InstanceInner,
+        ctx: impl AsContext,
+        map: &FxHashMap<ResourceType, ResourceType>,
+    ) -> Result<InstanceInner> {
         let store_id = ctx.as_context().inner.data().id;
         for (name, func) in &inner.component.export_types.root.functions {
-            inner.exports.root.functions.insert(name.clone(), Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?);
+            inner.exports.root.functions.insert(
+                name.clone(),
+                Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?,
+            );
         }
         for (name, res) in &inner.component.export_types.root.resources {
-            inner.exports.root.resources.insert(name.clone(), res.instantiate(store_id, inner.id)?);
+            inner
+                .exports
+                .root
+                .resources
+                .insert(name.clone(), res.instantiate(store_id, inner.id)?);
         }
-        
+
         let mut generated_functions = Vec::new();
         for (inst_name, inst) in &inner.component.export_types.instances {
             for (name, func) in &inst.functions {
-                let export = Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?;
+                let export =
+                    Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?;
                 generated_functions.push((inst_name.clone(), name.clone(), export));
             }
             for (name, res) in &inst.resources {
-                inner.exports.instances.entry(inst_name.clone()).or_insert_with(ExportInstance::new).resources.insert(name.clone(), res.instantiate(store_id, inner.id)?);
+                inner
+                    .exports
+                    .instances
+                    .entry(inst_name.clone())
+                    .or_insert_with(ExportInstance::new)
+                    .resources
+                    .insert(name.clone(), res.instantiate(store_id, inner.id)?);
             }
         }
 
         for (inst_name, name, func) in generated_functions {
-            let interface = inner.exports.instances.entry(inst_name).or_insert_with(ExportInstance::new);
+            let interface = inner
+                .exports
+                .instances
+                .entry(inst_name)
+                .or_insert_with(ExportInstance::new);
             interface.functions.insert(name, func);
         }
 
         Ok(inner)
     }
 
-    fn import_function(inner: &InstanceInner, ctx: impl AsContext, options: &CanonicalOptions, func: &Function) -> GuestInvokeOptions {
-        let memory = options.memory.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_memories[&idx]).expect("Could not get runtime memory export.").into_memory().expect("Export was not of memory type."));
-        let realloc = options.realloc.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_reallocs[&idx]).expect("Could not get runtime realloc export.").into_func().expect("Export was not of func type."));
-        let post_return = options.post_return.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_post_returns[&idx]).expect("Could not get runtime post return export.").into_func().expect("Export was not of func type."));
+    fn import_function(
+        inner: &InstanceInner,
+        ctx: impl AsContext,
+        options: &CanonicalOptions,
+        func: &Function,
+    ) -> GuestInvokeOptions {
+        let memory = options.memory.map(|idx| {
+            Self::core_export(inner, &ctx, &inner.component.extracted_memories[&idx])
+                .expect("Could not get runtime memory export.")
+                .into_memory()
+                .expect("Export was not of memory type.")
+        });
+        let realloc = options.realloc.map(|idx| {
+            Self::core_export(inner, &ctx, &inner.component.extracted_reallocs[&idx])
+                .expect("Could not get runtime realloc export.")
+                .into_func()
+                .expect("Export was not of func type.")
+        });
+        let post_return = options.post_return.map(|idx| {
+            Self::core_export(inner, &ctx, &inner.component.extracted_post_returns[&idx])
+                .expect("Could not get runtime post return export.")
+                .into_func()
+                .expect("Export was not of func type.")
+        });
 
         GuestInvokeOptions {
             component: inner.component.clone(),
@@ -797,15 +1145,40 @@ impl Instance {
             resource_tables: inner.resource_tables.clone(),
             post_return,
             types: inner.types.clone(),
-            instance_id: inner.id
+            instance_id: inner.id,
         }
     }
 
-    fn export_function(inner: &InstanceInner, ctx: impl AsContext, def: &CoreExport<wasmtime_environ::EntityIndex>, options: &CanonicalOptions, func: &Function, mapping: &FxHashMap<ResourceType, ResourceType>) -> Result<crate::func::Func> {
-        let callee = Self::core_export(inner, &ctx, def).expect("Could not get callee export.").into_func().expect("Export was not of func type.");
-        let memory = options.memory.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_memories[&idx]).expect("Could not get runtime memory export.").into_memory().expect("Export was not of memory type."));
-        let realloc = options.realloc.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_reallocs[&idx]).expect("Could not get runtime realloc export.").into_func().expect("Export was not of func type."));
-        let post_return = options.post_return.map(|idx| Self::core_export(inner, &ctx, &inner.component.extracted_post_returns[&idx]).expect("Could not get runtime post return export.").into_func().expect("Export was not of func type."));
+    fn export_function(
+        inner: &InstanceInner,
+        ctx: impl AsContext,
+        def: &CoreExport<wasmtime_environ::EntityIndex>,
+        options: &CanonicalOptions,
+        func: &Function,
+        mapping: &FxHashMap<ResourceType, ResourceType>,
+    ) -> Result<crate::func::Func> {
+        let callee = Self::core_export(inner, &ctx, def)
+            .expect("Could not get callee export.")
+            .into_func()
+            .expect("Export was not of func type.");
+        let memory = options.memory.map(|idx| {
+            Self::core_export(inner, &ctx, &inner.component.extracted_memories[&idx])
+                .expect("Could not get runtime memory export.")
+                .into_memory()
+                .expect("Export was not of memory type.")
+        });
+        let realloc = options.realloc.map(|idx| {
+            Self::core_export(inner, &ctx, &inner.component.extracted_reallocs[&idx])
+                .expect("Could not get runtime realloc export.")
+                .into_func()
+                .expect("Export was not of func type.")
+        });
+        let post_return = options.post_return.map(|idx| {
+            Self::core_export(inner, &ctx, &inner.component.extracted_post_returns[&idx])
+                .expect("Could not get runtime post return export.")
+                .into_func()
+                .expect("Export was not of func type.")
+        });
 
         Ok(crate::func::Func {
             store_id: ctx.as_context().inner.data().id,
@@ -820,108 +1193,215 @@ impl Instance {
                 resource_tables: inner.resource_tables.clone(),
                 post_return,
                 types: inner.types.clone(),
-                instance_id: inner.id
-            }))
+                instance_id: inner.id,
+            })),
         })
     }
 
-    fn core_import(inner: &InstanceInner, mut ctx: impl AsContextMut, def: &CoreDef, linker: &Linker, ty: ExternType, destructors: &mut Vec<TrampolineIndex>, resource_map: &FxHashMap<ResourceType, ResourceType>) -> Result<Extern> {
+    fn core_import(
+        inner: &InstanceInner,
+        mut ctx: impl AsContextMut,
+        def: &CoreDef,
+        linker: &Linker,
+        ty: ExternType,
+        destructors: &mut Vec<TrampolineIndex>,
+        resource_map: &FxHashMap<ResourceType, ResourceType>,
+    ) -> Result<Extern> {
         match def {
-            CoreDef::Export(x) => Self::core_export(inner, ctx, x).context("Could not find exported function."),
+            CoreDef::Export(x) => {
+                Self::core_export(inner, ctx, x).context("Could not find exported function.")
+            }
             CoreDef::Trampoline(x) => {
-                let ty = if let ExternType::Func(x) = ty { x } else { bail!("Incorrect extern type.") };
-                match inner.component.generated_trampolines.get(x).context("Could not find exported trampoline.")? {
+                let ty = if let ExternType::Func(x) = ty {
+                    x
+                } else {
+                    bail!("Incorrect extern type.")
+                };
+                match inner
+                    .component
+                    .generated_trampolines
+                    .get(x)
+                    .context("Could not find exported trampoline.")?
+                {
                     GeneratedTrampoline::ImportedFunction(component_import) => {
-                        let expected = crate::types::FuncType::from_component(&component_import.func, &inner.component, Some(resource_map))?;
+                        let expected = crate::types::FuncType::from_component(
+                            &component_import.func,
+                            &inner.component,
+                            Some(resource_map),
+                        )?;
                         let func = Self::get_component_import(inner, component_import, linker)?;
-                        ensure!(func.ty() == expected, "Function import {} had type {:?}, but expected {expected:?}", component_import.name, func.ty());
-                        let guest_options = Self::import_function(inner, &ctx, &component_import.options, &component_import.func);
-        
-                        Ok(Extern::Func(Func::new(ctx.as_context_mut().inner, ty, move |ctx, args, results| {
-                            let ctx = StoreContextMut { inner: ctx };
-                            func.call_from_guest(ctx, &guest_options, args, results)
-                        })))
-                    },
+                        ensure!(
+                            func.ty() == expected,
+                            "Function import {} had type {:?}, but expected {expected:?}",
+                            component_import.name,
+                            func.ty()
+                        );
+                        let guest_options = Self::import_function(
+                            inner,
+                            &ctx,
+                            &component_import.options,
+                            &component_import.func,
+                        );
+
+                        Ok(Extern::Func(Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |ctx, args, results| {
+                                let ctx = StoreContextMut { inner: ctx };
+                                func.call_from_guest(ctx, &guest_options, args, results)
+                            },
+                        )))
+                    }
                     GeneratedTrampoline::ResourceNew(x) => {
                         let x = x.as_u32();
                         let tables = inner.resource_tables.clone();
-                        Ok(Extern::Func(Func::new(ctx.as_context_mut().inner, ty, move |ctx, args, results| {
-                            let rep = require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
-                            let mut table_array = tables.try_lock().expect("Could not get mutual reference to table.");
-                            results[0] = wasm_runtime_layer::Value::I32(table_array[x as usize].add(HandleElement { rep, own: true, lend_count: 0 }));
-                            Ok(())
-                        })))
-                    },
+                        Ok(Extern::Func(Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |ctx, args, results| {
+                                let rep =
+                                    require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
+                                let mut table_array = tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                results[0] = wasm_runtime_layer::Value::I32(
+                                    table_array[x as usize].add(HandleElement {
+                                        rep,
+                                        own: true,
+                                        lend_count: 0,
+                                    }),
+                                );
+                                Ok(())
+                            },
+                        )))
+                    }
                     GeneratedTrampoline::ResourceRep(x) => {
                         let x = x.as_u32();
                         let tables = inner.resource_tables.clone();
-                        Ok(Extern::Func(Func::new(ctx.as_context_mut().inner, ty, move |ctx, args, results| {
-                            let idx = require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
-                            let mut table_array = tables.try_lock().expect("Could not get mutual reference to table.");
-                            results[0] = wasm_runtime_layer::Value::I32(table_array[x as usize].get(idx)?.rep);
-                            Ok(())
-                        })))
-                    },
+                        Ok(Extern::Func(Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |ctx, args, results| {
+                                let idx =
+                                    require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
+                                let mut table_array = tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                results[0] = wasm_runtime_layer::Value::I32(
+                                    table_array[x as usize].get(idx)?.rep,
+                                );
+                                Ok(())
+                            },
+                        )))
+                    }
                     GeneratedTrampoline::ResourceDrop(y, _) => {
                         destructors.push(*x);
                         let x = y.as_u32();
                         let tables = inner.resource_tables.clone();
-                        Ok(Extern::Func(Func::new(ctx.as_context_mut().inner, ty, move |mut ctx, args, results| {
-                            let idx = require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
-                            let mut table_array = tables.try_lock().expect("Could not get mutual reference to table.");
-                            let current_table = &mut table_array[x as usize];
-                    
-                            let elem_borrow = current_table.get(idx)?;
-                            
-                            if elem_borrow.own {
-                                ensure!(elem_borrow.lend_count == 0, "Attempted to drop loaned resource.");
-                                let elem = current_table.remove(idx)?;
-                                if let Some(destructor) = table_array[x as usize].destructor().cloned() {
-                                    drop(table_array);
-                                    destructor.call(ctx, &[wasm_runtime_layer::Value::I32(elem.rep)], &mut [])?;
+                        Ok(Extern::Func(Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |mut ctx, args, results| {
+                                let idx =
+                                    require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
+                                let mut table_array = tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                let current_table = &mut table_array[x as usize];
+
+                                let elem_borrow = current_table.get(idx)?;
+
+                                if elem_borrow.own {
+                                    ensure!(
+                                        elem_borrow.lend_count == 0,
+                                        "Attempted to drop loaned resource."
+                                    );
+                                    let elem = current_table.remove(idx)?;
+                                    if let Some(destructor) =
+                                        table_array[x as usize].destructor().cloned()
+                                    {
+                                        drop(table_array);
+                                        destructor.call(
+                                            ctx,
+                                            &[wasm_runtime_layer::Value::I32(elem.rep)],
+                                            &mut [],
+                                        )?;
+                                    }
                                 }
-                            }
-                            Ok(())
-                        })))
+                                Ok(())
+                            },
+                        )))
                     }
                 }
-            },
-            CoreDef::InstanceFlags(i) => Ok(Extern::Global(inner.instance_flags[*i].clone()))
+            }
+            CoreDef::InstanceFlags(i) => Ok(Extern::Global(inner.instance_flags[*i].clone())),
         }
     }
 
-    fn core_export<T: Copy + Into<wasmtime_environ::EntityIndex>>(inner: &InstanceInner, ctx: impl AsContext, export: &CoreExport<T>) -> Option<Extern> {
+    fn core_export<T: Copy + Into<wasmtime_environ::EntityIndex>>(
+        inner: &InstanceInner,
+        ctx: impl AsContext,
+        export: &CoreExport<T>,
+    ) -> Option<Extern> {
         let name = match &export.item {
-            ExportItem::Index(idx) => &inner.component.export_mapping[&inner.component.instance_modules[export.instance]][&(*idx).into()],
+            ExportItem::Index(idx) => {
+                &inner.component.export_mapping[&inner.component.instance_modules[export.instance]]
+                    [&(*idx).into()]
+            }
             ExportItem::Name(s) => s,
         };
 
         inner.instances[export.instance].get_export(&ctx.as_context().inner, &name)
     }
 
-    fn global_initialize(mut inner: InstanceInner, mut ctx: impl AsContextMut, linker: &Linker, resource_map: &FxHashMap<ResourceType, ResourceType>) -> Result<InstanceInner> {
+    fn global_initialize(
+        mut inner: InstanceInner,
+        mut ctx: impl AsContextMut,
+        linker: &Linker,
+        resource_map: &FxHashMap<ResourceType, ResourceType>,
+    ) -> Result<InstanceInner> {
         let mut destructors = Vec::new();
         for initializer in &inner.component.translation.component.initializers {
             match initializer {
                 GlobalInitializer::InstantiateModule(InstantiateModule::Static(idx, def)) => {
                     let module = &inner.component.modules[idx];
-                    let imports = Self::generate_imports(&inner, &mut ctx, linker, module, &def, &mut destructors, resource_map)?;
-                    let instance = wasm_runtime_layer::Instance::new(&mut ctx.as_context_mut().inner, &module.module, &imports)?;
+                    let imports = Self::generate_imports(
+                        &inner,
+                        &mut ctx,
+                        linker,
+                        module,
+                        &def,
+                        &mut destructors,
+                        resource_map,
+                    )?;
+                    let instance = wasm_runtime_layer::Instance::new(
+                        &mut ctx.as_context_mut().inner,
+                        &module.module,
+                        &imports,
+                    )?;
                     inner.instances.push(instance);
-                },
-                GlobalInitializer::ExtractMemory(_) => {},
-                GlobalInitializer::ExtractRealloc(_) => {},
-                GlobalInitializer::ExtractPostReturn(_) => {},
-                GlobalInitializer::LowerImport { .. } => {},
-                GlobalInitializer::Resource(_) => { },
-                _ => bail!("Not yet implemented {initializer:?}.")
+                }
+                GlobalInitializer::ExtractMemory(_) => {}
+                GlobalInitializer::ExtractRealloc(_) => {}
+                GlobalInitializer::ExtractPostReturn(_) => {}
+                GlobalInitializer::LowerImport { .. } => {}
+                GlobalInitializer::Resource(_) => {}
+                _ => bail!("Not yet implemented {initializer:?}."),
             }
         }
 
         Self::fill_destructors(inner, ctx, destructors, resource_map)
     }
 
-    fn generate_imports(inner: &InstanceInner, mut store: impl AsContextMut, linker: &Linker, module: &ModuleTranslation, defs: &[CoreDef], destructors: &mut Vec<TrampolineIndex>, resource_map: &FxHashMap<ResourceType, ResourceType>) -> Result<Imports> {
+    fn generate_imports(
+        inner: &InstanceInner,
+        mut store: impl AsContextMut,
+        linker: &Linker,
+        module: &ModuleTranslation,
+        defs: &[CoreDef],
+        destructors: &mut Vec<TrampolineIndex>,
+        resource_map: &FxHashMap<ResourceType, ResourceType>,
+    ) -> Result<Imports> {
         let mut import_ty_map = FxHashMap::default();
 
         let engine = store.as_context().engine().clone();
@@ -931,40 +1411,82 @@ impl Instance {
 
         let mut imports = Imports::default();
 
-        for (host, name, def) in module.translation
+        for (host, name, def) in module
+            .translation
             .imports()
             .zip(defs)
-            .map(|((module, name, _), arg)| (module, name, arg)) {
-            let ty = import_ty_map.get(&(host, name)).context("Unrecognized import.")?.clone();
-            imports.define(host, name, Self::core_import(inner, &mut store, def, linker, ty, destructors, resource_map)?);
+            .map(|((module, name, _), arg)| (module, name, arg))
+        {
+            let ty = import_ty_map
+                .get(&(host, name))
+                .context("Unrecognized import.")?
+                .clone();
+            imports.define(
+                host,
+                name,
+                Self::core_import(
+                    inner,
+                    &mut store,
+                    def,
+                    linker,
+                    ty,
+                    destructors,
+                    resource_map,
+                )?,
+            );
         }
 
         Ok(imports)
     }
 
-    fn get_component_import(inner: &InstanceInner, import: &ComponentImport, linker: &Linker) -> Result<crate::func::Func> {
+    fn get_component_import(
+        inner: &InstanceInner,
+        import: &ComponentImport,
+        linker: &Linker,
+    ) -> Result<crate::func::Func> {
         let inst = if let Some(name) = &import.instance {
-            linker.instance(name).ok_or_else(|| Error::msg(format!("Could not find imported interface {name:?}")))?
-        }
-        else {
+            linker
+                .instance(name)
+                .ok_or_else(|| Error::msg(format!("Could not find imported interface {name:?}")))?
+        } else {
             linker.root()
         };
 
-        inst.func(&import.name).ok_or_else(|| Error::msg(format!("Could not find function import {}", import.name)))
+        inst.func(&import.name)
+            .ok_or_else(|| Error::msg(format!("Could not find function import {}", import.name)))
     }
 
-    fn fill_destructors(mut inner: InstanceInner, ctx: impl AsContext, destructors: Vec<TrampolineIndex>, resource_map: &FxHashMap<ResourceType, ResourceType>) -> Result<InstanceInner> {
-        let mut tables = inner.resource_tables.try_lock().expect("Could not get access to resource tables.");
-        
+    fn fill_destructors(
+        mut inner: InstanceInner,
+        ctx: impl AsContext,
+        destructors: Vec<TrampolineIndex>,
+        resource_map: &FxHashMap<ResourceType, ResourceType>,
+    ) -> Result<InstanceInner> {
+        let mut tables = inner
+            .resource_tables
+            .try_lock()
+            .expect("Could not get access to resource tables.");
+
         for index in destructors {
-            let (x, def) = require_matches!(&inner.component.generated_trampolines[&index], GeneratedTrampoline::ResourceDrop(x, def), (x, def));
+            let (x, def) = require_matches!(
+                &inner.component.generated_trampolines[&index],
+                GeneratedTrampoline::ResourceDrop(x, def),
+                (x, def)
+            );
             if let Some(def) = def {
                 let export = require_matches!(def, CoreDef::Export(x), x);
-                tables[x.as_u32() as usize].set_destructor(Some(require_matches!(Self::core_export(&inner, &ctx, export), Some(Extern::Func(x)), x)));
+                tables[x.as_u32() as usize].set_destructor(Some(require_matches!(
+                    Self::core_export(&inner, &ctx, export),
+                    Some(Extern::Func(x)),
+                    x
+                )));
             }
         }
 
-        for (id, idx) in inner.component.resolve.types.iter().filter_map(|(i, _)| { let val = inner.component.resource_map[i.index()]; (val.as_u32() < u32::MAX - 1).then_some((i, val)) }) {
+        for (id, idx) in inner.component.resolve.types.iter().filter_map(|(i, _)| {
+            let val = inner.component.resource_map[i.index()];
+            (val.as_u32() < u32::MAX - 1).then_some((i, val))
+        }) {
             let res = ResourceType::from_resolve(id, &inner.component, Some(resource_map))?;
             if let Some(Some(func)) = res.host_destructor() {
                 tables[idx.as_u32() as usize].set_destructor(Some(func));
@@ -981,12 +1503,16 @@ impl Instance {
 pub struct Exports {
     root: ExportInstance,
     instances: FxHashMap<InterfaceIdentifier, ExportInstance>,
-    package: PackageIdentifier
+    package: PackageIdentifier,
 }
 
 impl Exports {
     pub(crate) fn new(package: PackageIdentifier) -> Self {
-        Self { root: ExportInstance::new(), instances: FxHashMap::default(), package }
+        Self {
+            root: ExportInstance::new(),
+            instances: FxHashMap::default(),
+            package,
+        }
     }
 
     pub fn root(&self) -> &ExportInstance {
@@ -1001,7 +1527,9 @@ impl Exports {
         self.instances.get(name)
     }
 
-    pub fn instances<'a>(&'a self) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportInstance)> {
+    pub fn instances<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportInstance)> {
         self.instances.iter()
     }
 }
@@ -1009,12 +1537,15 @@ impl Exports {
 #[derive(Debug)]
 pub struct ExportInstance {
     functions: FxHashMap<Arc<str>, crate::func::Func>,
-    resources: FxHashMap<Arc<str>, ResourceType>
+    resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
 impl ExportInstance {
     pub(crate) fn new() -> Self {
-        Self { functions: FxHashMap::default(), resources: FxHashMap::default() }
+        Self {
+            functions: FxHashMap::default(),
+            resources: FxHashMap::default(),
+        }
     }
 
     pub fn func(&self, name: impl AsRef<str>) -> Option<crate::func::Func> {
@@ -1042,7 +1573,7 @@ struct InstanceInner {
     pub instance_flags: wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>,
     pub instances: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, wasm_runtime_layer::Instance>,
     pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
-    pub types: Arc<[crate::types::ValueType]>
+    pub types: Arc<[crate::types::ValueType]>,
 }
 
 #[derive(Clone, Debug)]
@@ -1050,7 +1581,7 @@ struct ComponentImport {
     pub instance: Option<InterfaceIdentifier>,
     pub name: Arc<str>,
     pub func: Function,
-    pub options: CanonicalOptions
+    pub options: CanonicalOptions,
 }
 
 #[derive(Clone, Debug)]
@@ -1058,7 +1589,7 @@ struct ComponentExport {
     pub options: CanonicalOptions,
     pub func: Function,
     pub def: CoreExport<wasmtime_environ::EntityIndex>,
-    pub ty: crate::types::FuncType
+    pub ty: crate::types::FuncType,
 }
 
 /// The store represents all global state that can be manipulated by
@@ -1081,7 +1612,14 @@ impl<T, E: backend::WasmEngine> Store<T, E> {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         Self {
-            inner: wasm_runtime_layer::Store::new(&engine, StoreInner { id: ID_COUNTER.fetch_add(1, Ordering::AcqRel), data, host_functions: FuncVec::default() }),
+            inner: wasm_runtime_layer::Store::new(
+                &engine,
+                StoreInner {
+                    id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
+                    data,
+                    host_functions: FuncVec::default(),
+                },
+            ),
         }
     }
 
@@ -1158,7 +1696,6 @@ impl<'a, T: 'a, E: backend::WasmEngine> StoreContextMut<'a, T, E> {
         &mut self.inner.data_mut().data
     }
 }
-
 
 /// A trait used to get shared access to a [`Store`].
 pub trait AsContext {
@@ -1259,7 +1796,7 @@ impl<'a, T: 'a, E: backend::WasmEngine> AsContextMut for StoreContextMut<'a, T, 
 struct StoreInner<T, E: backend::WasmEngine> {
     pub id: u64,
     pub data: T,
-    pub host_functions: FuncVec<T, E>
+    pub host_functions: FuncVec<T, E>,
 }
 
 #[derive(Clone, Debug)]
@@ -1267,21 +1804,21 @@ enum GeneratedTrampoline {
     ImportedFunction(ComponentImport),
     ResourceNew(TypeResourceTableIndex),
     ResourceRep(TypeResourceTableIndex),
-    ResourceDrop(TypeResourceTableIndex, Option<CoreDef>)
+    ResourceDrop(TypeResourceTableIndex, Option<CoreDef>),
 }
 
 #[derive(Copy, Clone, Debug, Default)]
 struct HandleElement {
     pub rep: i32,
     pub own: bool,
-    pub lend_count: i32
+    pub lend_count: i32,
 }
 
 #[derive(Clone, Debug, Default)]
 struct HandleTable {
     array: VecOption<HandleElement>,
     destructor: Option<wasm_runtime_layer::Func>,
-    free: Vec<i32>
+    free: Vec<i32>,
 }
 
 impl HandleTable {
@@ -1294,19 +1831,27 @@ impl HandleTable {
     }
 
     pub fn get(&self, i: i32) -> Result<&HandleElement> {
-        self.array.get(i as usize).and_then(std::convert::identity).context("Invalid handle index.")
+        self.array
+            .get(i as usize)
+            .and_then(std::convert::identity)
+            .context("Invalid handle index.")
     }
 
     pub fn set(&mut self, i: i32, element: HandleElement) {
-        *self.array.get_mut(i as usize).expect("Invalid handle index.") = Some(element);
+        *self
+            .array
+            .get_mut(i as usize)
+            .expect("Invalid handle index.") = Some(element);
     }
 
     pub fn add(&mut self, handle: HandleElement) -> i32 {
         if let Some(i) = self.free.pop() {
-            *self.array.get_mut(i as usize).expect("Could not get free index from list.") = Some(handle);
+            *self
+                .array
+                .get_mut(i as usize)
+                .expect("Could not get free index from list.") = Some(handle);
             i
-        }
-        else {
+        } else {
             let i = self.array.len();
             self.array.push(handle);
             i as i32
@@ -1314,7 +1859,12 @@ impl HandleTable {
     }
 
     pub fn remove(&mut self, i: i32) -> Result<HandleElement> {
-        let res = self.array.get_mut(i as usize).context("Invalid handle index.")?.take().context("Invalid handle index.")?;
+        let res = self
+            .array
+            .get_mut(i as usize)
+            .context("Invalid handle index.")?
+            .take()
+            .context("Invalid handle index.")?;
         self.free.push(i);
         Ok(res)
     }
@@ -1342,26 +1892,75 @@ mod tests {
         let mut linker = Linker::default();
 
         let inst_0 = linker.instantiate(&mut store, &comp_0).unwrap();
-        
-        let real_inst = inst_0.exports().instance(&"test:guest/tester".try_into().unwrap()).unwrap();
 
-        let link_int = linker.define_instance("test:guest/tester".try_into().unwrap()).unwrap();
+        let real_inst = inst_0
+            .exports()
+            .instance(&"test:guest/tester".try_into().unwrap())
+            .unwrap();
+
+        let link_int = linker
+            .define_instance("test:guest/tester".try_into().unwrap())
+            .unwrap();
         //link_int.define_resource("exp", real_inst.resource("exp").unwrap()).unwrap();
 
         //link_int.define_func("[constructor]exp", real_inst.func("[constructor]exp").unwrap()).unwrap();
         //link_int.define_func("[method]exp.test", real_inst.func("[method]exp.test").unwrap()).unwrap();
 
-        let defun = crate::func::Func::new(&mut store, crate::types::FuncType::new([crate::types::ValueType::S32], []), |_, _, _| { println!("im ded an gone"); Ok(())});
+        let defun = crate::func::Func::new(
+            &mut store,
+            crate::types::FuncType::new([crate::types::ValueType::S32], []),
+            |_, _, _| {
+                println!("im ded an gone");
+                Ok(())
+            },
+        );
         let my_resource = ResourceType::new(&mut store, Some(defun)).unwrap();
         let cpy = my_resource.clone();
         link_int.define_resource("exp", my_resource.clone());
-        
-        link_int.define_func("[constructor]exp", crate::func::Func::new(&mut store, crate::types::FuncType::new([], [crate::types::ValueType::Own(my_resource.clone())]), move |_, _, res| { res[0] = crate::values::Value::Own(crate::values::ResourceOwn::new(29, cpy.clone()).unwrap()); Ok(()) })).unwrap();
-        link_int.define_func("[method]exp.test", crate::func::Func::new(&mut store, crate::types::FuncType::new([crate::types::ValueType::Borrow(my_resource.clone())], [crate::types::ValueType::String]), |_, _, res| { res[0] = crate::values::Value::String("yay".into()); Ok(()) })).unwrap();
+
+        link_int
+            .define_func(
+                "[constructor]exp",
+                crate::func::Func::new(
+                    &mut store,
+                    crate::types::FuncType::new(
+                        [],
+                        [crate::types::ValueType::Own(my_resource.clone())],
+                    ),
+                    move |_, _, res| {
+                        res[0] = crate::values::Value::Own(
+                            crate::values::ResourceOwn::new(29, cpy.clone()).unwrap(),
+                        );
+                        Ok(())
+                    },
+                ),
+            )
+            .unwrap();
+        link_int
+            .define_func(
+                "[method]exp.test",
+                crate::func::Func::new(
+                    &mut store,
+                    crate::types::FuncType::new(
+                        [crate::types::ValueType::Borrow(my_resource.clone())],
+                        [crate::types::ValueType::String],
+                    ),
+                    |_, _, res| {
+                        res[0] = crate::values::Value::String("yay".into());
+                        Ok(())
+                    },
+                ),
+            )
+            .unwrap();
 
         let inst_1 = linker.instantiate(&mut store, &comp).unwrap();
 
-        let func = inst_1.exports().instance(&"test-two:guest/bester".try_into().unwrap()).unwrap().func("the-string").unwrap();
+        let func = inst_1
+            .exports()
+            .instance(&"test-two:guest/bester".try_into().unwrap())
+            .unwrap()
+            .func("the-string")
+            .unwrap();
         let mut res = [crate::values::Value::Bool(false)];
         func.call(&mut store, &[], &mut res).unwrap();
         println!("OMG WE GOT {res:?}");

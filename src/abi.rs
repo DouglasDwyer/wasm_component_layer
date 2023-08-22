@@ -1,10 +1,10 @@
 #![forbid(unused_results)]
 
-use anyhow::*;
 use std::cell::*;
-use wit_parser::*;
 
+use anyhow::*;
 pub use wit_parser::abi::{AbiVariant, WasmSignature, WasmType};
+use wit_parser::*;
 
 fn join(a: WasmType, b: WasmType) -> WasmType {
     use WasmType::*;
@@ -270,7 +270,7 @@ def_instruction! {
         /// types.
         ///
         /// Pops a list value from the stack, and pushes the following in order:
-        /// 
+        ///
         /// - The pointer to the list
         /// - The length of the list
         /// - ...the values in the list
@@ -821,7 +821,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             self.results.len()
         );
         self.stack.append(&mut self.results);
-        
+
         Ok(())
     }
 
@@ -859,16 +859,23 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     let realloc = self.list_realloc();
                     if self.bindgen.is_list_canonical(element) {
                         self.emit(&ListCanonLower { element, realloc })
-                    }
-                    else {
-                        let lower = ListLower { element, realloc, len: Cell::default() };
+                    } else {
+                        let lower = ListLower {
+                            element,
+                            realloc,
+                            len: Cell::default(),
+                        };
                         self.emit(&lower)?;
-    
+
                         let stride = self.bindgen.sizes().size(element) as i32;
-                        let len = if let ListLower { len, .. } = lower { len.get() } else { unreachable!() };
-    
+                        let len = if let ListLower { len, .. } = lower {
+                            len.get()
+                        } else {
+                            unreachable!()
+                        };
+
                         let addr = self.stack.pop().unwrap();
-    
+
                         for i in (0..len).rev() {
                             self.write_to_memory(element, addr.clone(), i * stride)?;
                         }
@@ -915,27 +922,21 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     Ok(())
                 }
 
-                TypeDefKind::Flags(flags) => {
-                    self.emit(&FlagsLower {
-                        flags,
-                        ty: id,
-                        name: self.resolve.types[id].name.as_ref().unwrap(),
-                    })
-                }
+                TypeDefKind::Flags(flags) => self.emit(&FlagsLower {
+                    flags,
+                    ty: id,
+                    name: self.resolve.types[id].name.as_ref().unwrap(),
+                }),
 
                 TypeDefKind::Variant(v) => {
                     self.lower_variant_arm(ty, v.cases.iter().map(|c| c.ty.as_ref()))
                 }
-                TypeDefKind::Enum(enum_) => {
-                    self.emit(&EnumLower {
-                        enum_,
-                        ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
-                    })
-                }
-                TypeDefKind::Option(t) => {
-                    self.lower_variant_arm(ty, [None, Some(t)])
-                }
+                TypeDefKind::Enum(enum_) => self.emit(&EnumLower {
+                    enum_,
+                    ty: id,
+                    name: self.resolve.types[id].name.as_deref().unwrap(),
+                }),
+                TypeDefKind::Option(t) => self.lower_variant_arm(ty, [None, Some(t)]),
                 TypeDefKind::Result(r) => {
                     self.lower_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])
                 }
@@ -955,20 +956,31 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         cases: impl IntoIterator<Item = Option<&'b Type>>,
     ) -> Result<()> {
         use Instruction::*;
-        let disc_val = ExtractVariantDiscriminant { discriminant_value: Cell::default() };
+        let disc_val = ExtractVariantDiscriminant {
+            discriminant_value: Cell::default(),
+        };
         self.emit(&disc_val)?;
 
-        let discriminant = if let ExtractVariantDiscriminant { discriminant_value } = disc_val { discriminant_value.get().0 } else { unreachable!() };
+        let discriminant = if let ExtractVariantDiscriminant { discriminant_value } = disc_val {
+            discriminant_value.get().0
+        } else {
+            unreachable!()
+        };
 
         let mut results = Vec::new();
         let mut temp = Vec::new();
         let mut casts = Vec::new();
         push_wasm(self.resolve, self.variant, ty, &mut results);
-        
+
         let payload_name = self.stack.pop().unwrap();
         self.emit(&I32Const { val: discriminant })?;
         let mut pushed = 1;
-        if let Some(ty) = cases.into_iter().skip(discriminant as usize).next().ok_or_else(|| Error::msg("Invalid discriminator value."))? {
+        if let Some(ty) = cases
+            .into_iter()
+            .skip(discriminant as usize)
+            .next()
+            .ok_or_else(|| Error::msg("Invalid discriminator value."))?
+        {
             // Using the payload of this block we lower the type to
             // raw wasm values.
             self.stack.push(payload_name);
@@ -1040,24 +1052,29 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 TypeDefKind::List(element) => {
                     if self.bindgen.is_list_canonical(element) {
                         self.emit(&ListCanonLift { element, ty: id })
-                    }
-                    else {
-                        let len = ReadI32 { value: Cell::default() };
+                    } else {
+                        let len = ReadI32 {
+                            value: Cell::default(),
+                        };
                         self.emit(&len)?;
-    
+
                         let len = match len {
                             ReadI32 { value } => value.get(),
-                            _ => unreachable!()
+                            _ => unreachable!(),
                         };
-    
+
                         let addr = self.stack.pop().unwrap();
                         let stride = self.bindgen.sizes().size(element) as i32;
-    
+
                         for i in 0..len {
                             self.read_from_memory(element, addr.clone(), stride * i)?;
                         }
-    
-                        self.emit(&ListLift { element, ty: id, len })
+
+                        self.emit(&ListLift {
+                            element,
+                            ty: id,
+                            len,
+                        })
                     }
                 }
                 TypeDefKind::Handle(handle) => {
@@ -1105,58 +1122,70 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     }
                     self.emit(&TupleLift { tuple, ty: id })
                 }
-                TypeDefKind::Flags(flags) => {
-                    self.emit(&FlagsLift {
-                        flags,
-                        ty: id,
-                        name: self.resolve.types[id].name.as_ref().unwrap(),
-                    })
-                }
+                TypeDefKind::Flags(flags) => self.emit(&FlagsLift {
+                    flags,
+                    ty: id,
+                    name: self.resolve.types[id].name.as_ref().unwrap(),
+                }),
 
                 TypeDefKind::Variant(v) => {
-                    let (discriminant, has_value) = self.lift_variant_arm(ty, v.cases.iter().map(|c| c.ty.as_ref()))?;
+                    let (discriminant, has_value) =
+                        self.lift_variant_arm(ty, v.cases.iter().map(|c| c.ty.as_ref()))?;
                     self.emit(&VariantLift {
                         variant: v,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
                         discriminant,
-                        has_value
+                        has_value,
                     })
                 }
 
                 TypeDefKind::Enum(enum_) => {
-                    let variant = ReadI32 { value: Cell::default() };
+                    let variant = ReadI32 {
+                        value: Cell::default(),
+                    };
                     self.emit(&variant)?;
                     if let ReadI32 { value } = variant {
                         self.emit(&EnumLift {
                             enum_,
                             ty: id,
                             name: self.resolve.types[id].name.as_deref().unwrap(),
-                            discriminant: value.get()
+                            discriminant: value.get(),
                         })
-                    }
-                    else {
+                    } else {
                         unreachable!()
                     }
                 }
 
                 TypeDefKind::Option(t) => {
                     let (discriminant, has_value) = self.lift_variant_arm(ty, [None, Some(t)])?;
-                    self.emit(&OptionLift { payload: t, ty: id, discriminant, has_value })
+                    self.emit(&OptionLift {
+                        payload: t,
+                        ty: id,
+                        discriminant,
+                        has_value,
+                    })
                 }
 
                 TypeDefKind::Result(r) => {
-                    let (discriminant, has_value) = self.lift_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])?;
-                    self.emit(&ResultLift { result: r, ty: id, discriminant, has_value })
+                    let (discriminant, has_value) =
+                        self.lift_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])?;
+                    self.emit(&ResultLift {
+                        result: r,
+                        ty: id,
+                        discriminant,
+                        has_value,
+                    })
                 }
 
                 TypeDefKind::Union(union) => {
-                    let (discriminant, _) = self.lift_variant_arm(ty, union.cases.iter().map(|c| Some(&c.ty)))?;
+                    let (discriminant, _) =
+                        self.lift_variant_arm(ty, union.cases.iter().map(|c| Some(&c.ty)))?;
                     self.emit(&UnionLift {
                         union,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                        discriminant
+                        discriminant,
                     })
                 }
 
@@ -1167,8 +1196,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
-    fn lift_variant_arm<'b>(&mut self, ty: &Type, cases: impl IntoIterator<Item = Option<&'b Type>>) -> Result<(i32, bool)> {
-        let variant = Instruction::ReadI32 { value: Cell::default() };
+    fn lift_variant_arm<'b>(
+        &mut self,
+        ty: &Type,
+        cases: impl IntoIterator<Item = Option<&'b Type>>,
+    ) -> Result<(i32, bool)> {
+        let variant = Instruction::ReadI32 {
+            value: Cell::default(),
+        };
         self.emit(&variant)?;
         if let Instruction::ReadI32 { value } = variant {
             let discriminant = value.get();
@@ -1180,8 +1215,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 .stack
                 .drain(self.stack.len() + 1 - params.len()..)
                 .collect::<Vec<_>>();
-            
-            let has_value = if let Some(ty) = cases.into_iter().skip(discriminant as usize).next().ok_or_else(|| Error::msg("Invalid discriminant value."))? {
+
+            let has_value = if let Some(ty) =
+                cases
+                    .into_iter()
+                    .skip(discriminant as usize)
+                    .next()
+                    .ok_or_else(|| Error::msg("Invalid discriminant value."))?
+            {
                 // Push only the values we need for this variant onto
                 // the stack.
                 temp.truncate(0);
@@ -1202,14 +1243,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 // Then recursively lift this variant's payload.
                 self.lift(ty)?;
                 true
-            }
-            else {
+            } else {
                 false
             };
 
             Ok((discriminant, has_value))
-        }
-        else {
+        } else {
             unreachable!()
         }
     }
@@ -1284,27 +1323,23 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 // case is writing the discriminant. After that if we have a
                 // payload we write the payload after the discriminant, aligned up
                 // to the type's alignment.
-                TypeDefKind::Variant(v) => {
-                    self.write_variant_arm_to_memory(
-                        offset,
-                        addr,
-                        v.tag(),
-                        v.cases.iter().map(|c| c.ty.as_ref()),
-                    )
-                }
+                TypeDefKind::Variant(v) => self.write_variant_arm_to_memory(
+                    offset,
+                    addr,
+                    v.tag(),
+                    v.cases.iter().map(|c| c.ty.as_ref()),
+                ),
 
                 TypeDefKind::Option(t) => {
                     self.write_variant_arm_to_memory(offset, addr, Int::U8, [None, Some(t)])
                 }
 
-                TypeDefKind::Result(r) => {
-                    self.write_variant_arm_to_memory(
-                        offset,
-                        addr,
-                        Int::U8,
-                        [r.ok.as_ref(), r.err.as_ref()],
-                    )
-                }
+                TypeDefKind::Result(r) => self.write_variant_arm_to_memory(
+                    offset,
+                    addr,
+                    Int::U8,
+                    [r.ok.as_ref(), r.err.as_ref()],
+                ),
 
                 TypeDefKind::Enum(e) => {
                     self.lower(ty)?;
@@ -1312,14 +1347,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.store_intrepr(offset, e.tag())
                 }
 
-                TypeDefKind::Union(union) => {
-                    self.write_variant_arm_to_memory(
-                        offset,
-                        addr,
-                        union.tag(),
-                        union.cases.iter().map(|c| Some(&c.ty)),
-                    )
-                }
+                TypeDefKind::Union(union) => self.write_variant_arm_to_memory(
+                    offset,
+                    addr,
+                    union.tag(),
+                    union.cases.iter().map(|c| Some(&c.ty)),
+                ),
 
                 TypeDefKind::Future(_) => todo!("write future to memory"),
                 TypeDefKind::Stream(_) => todo!("write stream to memory"),
@@ -1344,10 +1377,17 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         tag: Int,
         cases: impl IntoIterator<Item = Option<&'b Type>> + Clone,
     ) -> Result<()> {
-        let disc_val = Instruction::ExtractVariantDiscriminant { discriminant_value: Cell::default() };
+        let disc_val = Instruction::ExtractVariantDiscriminant {
+            discriminant_value: Cell::default(),
+        };
         self.emit(&disc_val)?;
 
-        let discriminant = if let Instruction::ExtractVariantDiscriminant { discriminant_value } = disc_val { discriminant_value.get().0 } else { unreachable!() };
+        let discriminant =
+            if let Instruction::ExtractVariantDiscriminant { discriminant_value } = disc_val {
+                discriminant_value.get().0
+            } else {
+                unreachable!()
+            };
 
         let payload_offset =
             offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
@@ -1356,7 +1396,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.emit(&Instruction::I32Const { val: discriminant })?;
         self.stack.push(addr.clone());
         self.store_intrepr(offset, tag)?;
-        if let Some(ty) = cases.into_iter().skip(discriminant as usize).next().ok_or_else(|| Error::msg("Invalid discriminator value."))? {
+        if let Some(ty) = cases
+            .into_iter()
+            .skip(discriminant as usize)
+            .next()
+            .ok_or_else(|| Error::msg("Invalid discriminator value."))?
+        {
             self.stack.push(payload_name.clone());
             self.write_to_memory(ty, addr.clone(), payload_offset)?;
         }
@@ -1434,7 +1479,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 // as we go along, then aggregate all the fields into the
                 // record.
                 TypeDefKind::Record(record) => {
-                    self.read_fields_from_memory(record.fields.iter().map(|f| &f.ty), addr, offset)?;
+                    self.read_fields_from_memory(
+                        record.fields.iter().map(|f| &f.ty),
+                        addr,
+                        offset,
+                    )?;
                     self.emit(&RecordLift {
                         record,
                         ty: id,
@@ -1485,13 +1534,19 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
                         discriminant,
-                        has_value
+                        has_value,
                     })
                 }
 
                 TypeDefKind::Option(t) => {
-                    let (discriminant, has_value) = self.read_variant_arm_from_memory(offset, addr, Int::U8, [None, Some(t)])?;
-                    self.emit(&OptionLift { payload: t, ty: id, discriminant, has_value })
+                    let (discriminant, has_value) =
+                        self.read_variant_arm_from_memory(offset, addr, Int::U8, [None, Some(t)])?;
+                    self.emit(&OptionLift {
+                        payload: t,
+                        ty: id,
+                        discriminant,
+                        has_value,
+                    })
                 }
 
                 TypeDefKind::Result(r) => {
@@ -1501,7 +1556,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         Int::U8,
                         [r.ok.as_ref(), r.err.as_ref()],
                     )?;
-                    self.emit(&ResultLift { result: r, discriminant, has_value, ty: id })
+                    self.emit(&ResultLift {
+                        result: r,
+                        discriminant,
+                        has_value,
+                        ty: id,
+                    })
                 }
 
                 TypeDefKind::Enum(e) => {
@@ -1521,7 +1581,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         union,
                         ty: id,
                         name: self.resolve.types[id].name.as_deref().unwrap(),
-                        discriminant
+                        discriminant,
                     })
                 }
 
@@ -1532,7 +1592,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
-    fn read_results_from_memory(&mut self, results: &Results, addr: B::Operand, offset: i32) -> Result<()> {
+    fn read_results_from_memory(
+        &mut self,
+        results: &Results,
+        addr: B::Operand,
+        offset: i32,
+    ) -> Result<()> {
         self.read_fields_from_memory(results.iter_types(), addr, offset)
     }
 
@@ -1557,27 +1622,38 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(())
     }
 
-    fn read_variant_arm_from_memory<'b>(&mut self, offset: i32, addr: B::Operand, tag: Int, cases: impl IntoIterator<Item = Option<&'b Type>> + Clone) -> Result<(i32, bool)> {
+    fn read_variant_arm_from_memory<'b>(
+        &mut self,
+        offset: i32,
+        addr: B::Operand,
+        tag: Int,
+        cases: impl IntoIterator<Item = Option<&'b Type>> + Clone,
+    ) -> Result<(i32, bool)> {
         self.stack.push(addr.clone());
         self.load_intrepr(offset, tag)?;
-        let variant = Instruction::ReadI32 { value: Cell::default() };
+        let variant = Instruction::ReadI32 {
+            value: Cell::default(),
+        };
         self.emit(&variant)?;
         let payload_offset =
             offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
 
         if let Instruction::ReadI32 { value } = variant {
             let disc = value.get();
-            let has_value = if let Some(ty) = cases.into_iter().skip(disc as usize).next().ok_or_else(|| Error::msg("Invalid discriminant value."))? {
+            let has_value = if let Some(ty) = cases
+                .into_iter()
+                .skip(disc as usize)
+                .next()
+                .ok_or_else(|| Error::msg("Invalid discriminant value."))?
+            {
                 self.read_from_memory(ty, addr.clone(), payload_offset)?;
                 true
-            }
-            else {
+            } else {
                 false
             };
-    
+
             Ok((disc, has_value))
-        }
-        else {
+        } else {
             unreachable!()
         }
     }
@@ -1703,7 +1779,12 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
 
             TypeDefKind::Variant(v) => {
                 result.push(v.tag().into());
-                push_wasm_variants(resolve, variant, v.cases.iter().map(|c| c.ty.as_ref()), result);
+                push_wasm_variants(
+                    resolve,
+                    variant,
+                    v.cases.iter().map(|c| c.ty.as_ref()),
+                    result,
+                );
             }
 
             TypeDefKind::Enum(e) => result.push(e.tag().into()),
@@ -1720,7 +1801,12 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
 
             TypeDefKind::Union(u) => {
                 result.push(WasmType::I32);
-                push_wasm_variants(resolve, variant, u.cases.iter().map(|c| Some(&c.ty)), result);
+                push_wasm_variants(
+                    resolve,
+                    variant,
+                    u.cases.iter().map(|c| Some(&c.ty)),
+                    result,
+                );
             }
 
             TypeDefKind::Future(_) => {
