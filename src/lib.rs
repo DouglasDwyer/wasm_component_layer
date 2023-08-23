@@ -3,7 +3,84 @@
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
 
-//! Crate documentation
+//! `wasm_component_layer` is a runtime agnostic implementation of the [WebAssembly component model](https://github.com/WebAssembly/component-model).
+//! It supports loading and linking WASM components, inspecting and generating component interface types at runtime, and atop any WebAssembly backend. The implementation is based upon the [`wasmtime`](https://github.com/bytecodealliance/wasmtime), [`js-component-bindgen`](https://github.com/bytecodealliance/jco), and [`wit-parser`](https://github.com/bytecodealliance/wasm-tools/tree/main) crates.
+//! 
+//! ## Usage
+//! 
+//! To use `wasm_component_layer`, a runtime is required. The [`wasm_runtime_layer`](https://github.com/DouglasDwyer/wasm_runtime_layer) crate provides the common interface used for WebAssembly runtimes, so when using this crate it must also be added to the `Cargo.toml` file with the appropriate runtime selected. For instance, the examples in this repository use the [`wasmi`](https://github.com/paritytech/wasmi) runtime:
+//! 
+//! ```toml
+//! wasm_component_layer = "0.1.0"
+//! wasm_runtime_layer = { version = "0.1.1", features = [ "backend_wasmi" ] }
+//! ```
+//! 
+//! The following is a small overview of `wasm_component_layer`'s API. The complete example may be found in the [examples folder](/examples). Consider a WASM component with the following WIT:
+//! 
+//! ```wit
+//! package test:guest
+//! 
+//! interface foo {
+//!     // Selects the item in position n within list x
+//!     select-nth: func(x: list<string>, n: u32) -> string
+//! }
+//! 
+//! world guest {
+//!     export foo
+//! }
+//! ```
+//! 
+//! The component can be loaded into `wasm_component_layer` and invoked as follows:
+//! 
+//! ```ignore
+//! use wasm_component_layer::*;
+//! 
+//! // The bytes of the component.
+//! const WASM: &[u8] = include_bytes!("single_component/component.wasm");
+//! 
+//! pub fn main() {
+//!     // Create a new engine for instantiating a component.
+//!     let engine = Engine::new(wasmi::Engine::default());
+//! 
+//!     // Create a store for managing WASM data and any custom user-defined state.
+//!     let mut store = Store::new(&engine, ());
+//!     
+//!     // Parse the component bytes and load its imports and exports.
+//!     let component = Component::new(&engine, WASM).unwrap();
+//!     // Create a linker that will be used to resolve the component's imports, if any.
+//!     let linker = Linker::default();
+//!     // Create an instance of the component using the linker.
+//!     let instance = linker.instantiate(&mut store, &component).unwrap();
+//! 
+//!     // Get the interface that the interface exports.
+//!     let interface = instance.exports().instance(&"test:guest/foo".try_into().unwrap()).unwrap();
+//!     // Get the function for selecting a list element.
+//!     let select_nth = interface.func("select-nth").unwrap().typed::<(Vec<String>, u32), (String,)>().unwrap();
+//! 
+//!     // Create an example list to test upon.
+//!     let example = ["a", "b", "c"].iter().map(ToString::to_string).collect::<Vec<_>>();
+//!     
+//!     println!("Calling select-nth({example:?}, 1) == {}", select_nth.call(&mut store, (example.clone(), 1)).unwrap().0);
+//!     // Prints 'Calling select-nth(["a", "b", "c"], 1) == b'
+//! }
+//! ```
+//! 
+//! ## Features
+//! 
+//! `wasm_component_layer` supports the following major features:
+//! 
+//! - Parsing and instantiating WASM component binaries
+//! - Runtime generation of component interface types
+//! - Specialized list types for faster 
+//! - Structural equality of component interface types, as mandated by the spec
+//! - Support for guest resources
+//! - Support for strongly-typed host resources with destructors
+//! 
+//! The following features have yet to be implemented:
+//! 
+//! - A macro for generating host bindings
+//! - More comprehensive tests
+//! - Subtyping
 
 /// Implements the Canonical ABI conventions for converting between guest and host types.
 mod abi;
@@ -32,7 +109,6 @@ use fxhash::*;
 use id_arena::*;
 
 use slab::*;
-use vec_option::*;
 pub use wasm_runtime_layer::Engine;
 use wasm_runtime_layer::*;
 use wasmtime_environ::component::*;
@@ -1090,7 +1166,7 @@ impl Instance {
         let mut tables = self.0.state_table.resource_tables.try_lock().expect("Could not lock resource tables.");
         for table in &mut *tables {
             if let Some(destructor) = table.destructor.as_ref() {
-                for val in table.array.iter().flatten() {
+                for (_, val) in table.array.iter() {
                     if let Err(x) = destructor.call(&mut ctx.inner, &[wasm_runtime_layer::Value::I32(val.rep)], &mut []) {
                         errors.push(x);
                     }
@@ -2016,11 +2092,9 @@ struct HandleElement {
 #[derive(Clone, Debug, Default)]
 struct HandleTable {
     /// The array of handles.
-    array: VecOption<HandleElement>,
+    array: Slab<HandleElement>,
     /// The destructor for this handle type.
     destructor: Option<wasm_runtime_layer::Func>,
-    /// A list of free slots in the array.
-    free: Vec<i32>,
 }
 
 impl HandleTable {
@@ -2038,7 +2112,6 @@ impl HandleTable {
     pub fn get(&self, i: i32) -> Result<&HandleElement> {
         self.array
             .get(i as usize)
-            .and_then(std::convert::identity)
             .context("Invalid handle index.")
     }
 
@@ -2048,34 +2121,17 @@ impl HandleTable {
         *self
             .array
             .get_mut(i as usize)
-            .expect("Invalid handle index.") = Some(element);
+            .expect("Invalid handle index.") = element;
     }
 
     /// Inserts a new handle into this table, returning its index.
     pub fn add(&mut self, handle: HandleElement) -> i32 {
-        if let Some(i) = self.free.pop() {
-            *self
-                .array
-                .get_mut(i as usize)
-                .expect("Could not get free index from list.") = Some(handle);
-            i
-        } else {
-            let i = self.array.len();
-            self.array.push(handle);
-            i as i32
-        }
+        self.array.insert(handle) as i32
     }
 
     /// Removes the handle at the provided index from the table,
     /// or fails if there was no handle present.
     pub fn remove(&mut self, i: i32) -> Result<HandleElement> {
-        let res = self
-            .array
-            .get_mut(i as usize)
-            .context("Invalid handle index.")?
-            .take()
-            .context("Invalid handle index.")?;
-        self.free.push(i);
-        Ok(res)
+        Ok(self.array.remove(i as usize))
     }
 }

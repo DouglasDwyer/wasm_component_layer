@@ -2,6 +2,12 @@
 name = "wasm_component_layer"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/DouglasDwyer/wasm_component_layer"
+readme = "README.md"
+description = """
+WebAssembly component model implementation for any backend.
+"""
 
 [dependencies]
 anyhow = "1.0.72"
@@ -12,7 +18,6 @@ once_cell = "1.18.0"
 ref-cast = "1.0.19"
 semver = "1.0.18"
 slab = "0.4.9"
-vec-option = "0.3.0"
 wasm_runtime_layer = "0.1.1"
 wasmtime-environ = { version = "12.0.0", features = [ "component-model" ] }
 wit-component = { version = "0.13.1" }
