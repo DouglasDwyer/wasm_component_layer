@@ -4,7 +4,7 @@
 #![warn(clippy::missing_docs_in_private_items)]
 
 //! `wasm_component_layer` is a runtime agnostic implementation of the [WebAssembly component model](https://github.com/WebAssembly/component-model).
-//! It supports loading and linking WASM components, inspecting and generating component interface types at runtime, and atop any WebAssembly backend. The implementation is based upon the [`wasmtime`](https://github.com/bytecodealliance/wasmtime), [`js-component-bindgen`](https://github.com/bytecodealliance/jco), and [`wit-parser`](https://github.com/bytecodealliance/wasm-tools/tree/main) crates.
+//! It supports loading and linking WASM components, inspecting and generating component interface types at runtime, and more atop any WebAssembly backend. The implementation is based upon the [`wasmtime`](https://github.com/bytecodealliance/wasmtime), [`js-component-bindgen`](https://github.com/bytecodealliance/jco), and [`wit-parser`](https://github.com/bytecodealliance/wasm-tools/tree/main) crates.
 //!
 //! ## Usage
 //!
