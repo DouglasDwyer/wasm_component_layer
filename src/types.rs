@@ -794,14 +794,14 @@ macro_rules! impl_component_list {
             fn into_values(self, values: &mut [crate::values::Value]) -> Result<()> {
                 let ($($extra,)+) = self;
                 let mut counter = 0;
-                $(values[{ let res = counter; counter += 1; res }] = $extra.try_into()?;)+
+                $(values[{ let res = counter; counter += 1; res }] = $extra.into_value()?;)+
                 Ok(())
             }
 
             #[allow(warnings)]
             fn from_values(values: &[crate::values::Value]) -> Result<Self> {
                 let mut counter = 0;
-                Ok(($($name::try_from(&values[{ let res = counter; counter += 1; res }])?, )+))
+                Ok(($($name::from_value(&values[{ let res = counter; counter += 1; res }])?, )+))
             }
         }
     };

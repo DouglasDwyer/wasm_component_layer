@@ -6,11 +6,12 @@ use std::sync::atomic::*;
 use std::sync::*;
 
 use anyhow::*;
+use once_cell::sync::*;
 use private::*;
 
 use crate::require_matches::require_matches;
 use crate::types::*;
-use crate::{AsContext};
+use crate::AsContext;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -840,10 +841,12 @@ impl PartialEq for ResourceBorrow {
     }
 }
 
-pub trait ComponentType:
-    'static + for<'a> TryFrom<&'a Value, Error = Error> + TryInto<Value, Error = Error>
-{
+pub trait ComponentType: 'static + Sized {
     fn ty() -> ValueType;
+
+    fn from_value(value: &Value) -> Result<Self>;
+
+    fn into_value(self) -> Result<Value>;
 }
 
 macro_rules! impl_primitive_component_type {
@@ -852,6 +855,14 @@ macro_rules! impl_primitive_component_type {
             impl ComponentType for $type_name {
                 fn ty() -> ValueType {
                     ValueType::$enum_name
+                }
+
+                fn from_value(value: &Value) -> Result<Self> {
+                    Ok(require_matches!(value, Value::$enum_name(x), *x))
+                }
+                
+                fn into_value(self) -> Result<Value> {
+                    Ok(Value::$enum_name(self))
                 }
             }
         )*
@@ -866,34 +877,189 @@ impl ComponentType for String {
     fn ty() -> ValueType {
         ValueType::String
     }
-}
 
-impl TryFrom<&Value> for String {
-    type Error = Error;
-
-    fn try_from(value: &Value) -> Result<Self> {
+    fn from_value(value: &Value) -> Result<Self> {
         Ok(require_matches!(value, Value::String(x), (**x).into()))
+    }
+
+    fn into_value(self) -> Result<Value> {
+        Ok(Value::String(self.into()))
     }
 }
 
-impl TryFrom<String> for Value {
-    type Error = Error;
+impl ComponentType for Box<str> {
+    fn ty() -> ValueType {
+        ValueType::String   
+    }
 
-    fn try_from(value: String) -> Result<Self> {
-        Ok(Value::String(value.into()))
+    fn from_value(value: &Value) -> Result<Self> {
+        Ok(require_matches!(value, Value::String(x), x).to_string().into())
+    }
+
+    fn into_value(self) -> Result<Value> {
+        Ok(Value::String(self.into()))
+    }
+}
+
+impl ComponentType for Arc<str> {
+    fn ty() -> ValueType {
+        ValueType::String   
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        Ok(require_matches!(value, Value::String(x), x).clone())
+    }
+
+    fn into_value(self) -> Result<Value> {
+        Ok(Value::String(self))
+    }
+}
+
+struct OptionTypeVal<T: ComponentType>(T);
+
+impl<T: ComponentType> OptionTypeVal<T> {
+    fn ty() -> OptionType {
+        static TY: OnceCell<OptionType> = OnceCell::new();
+        TY.get_or_init(|| OptionType::new(T::ty())).clone()
+    }
+}
+
+impl<T: ComponentType> ComponentType for Option<T> {
+    fn ty() -> ValueType {
+        ValueType::Option(OptionTypeVal::<T>::ty())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        let inner = require_matches!(value, Value::Option(x), x);
+        if let Some(val) = &**inner {
+            Ok(Some(T::from_value(val)?))
+        }
+        else {
+            Ok(None)
+        }
+    }
+
+    fn into_value(self) -> Result<Value> {
+        if let Some(val) = self {
+            Ok(Value::Option(OptionValue::new(OptionTypeVal::<T>::ty(), Some(T::into_value(val)?))?))
+        }
+        else {
+            Ok(Value::Option(OptionValue::new(OptionTypeVal::<T>::ty(), None)?))
+        }
+    }
+}
+
+impl<T: ComponentType> ComponentType for Box<T> {
+    fn ty() -> ValueType {
+        T::ty()
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        Ok(Box::new(T::from_value(value)?))
+    }
+
+    fn into_value(self) -> Result<Value> {
+        Ok(T::into_value(*self)?)
+    }
+}
+
+struct ResultTypeValOk<T: ComponentType>(T);
+
+impl<T: ComponentType> ResultTypeValOk<T> {
+    fn ty() -> ResultType {
+        static TY: OnceCell<ResultType> = OnceCell::new();
+        TY.get_or_init(|| ResultType::new(Some(T::ty()), None)).clone()
+    }
+}
+
+impl<T: ComponentType> ComponentType for Result<T, ()> {
+    fn ty() -> ValueType {
+        ValueType::Result(ResultTypeValOk::<T>::ty())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match &**require_matches!(value, Value::Result(x), x) {
+            std::result::Result::Ok(Some(x)) => Ok(std::result::Result::Ok(T::from_value(x)?)),
+            std::result::Result::Err(None) => Ok(std::result::Result::Err(())),
+            _ => bail!("Incorrect result type.")
+        }
+    }
+
+    fn into_value(self) -> Result<Value> {
+        match self {
+            std::result::Result::Ok(x) => Ok(Value::Result(ResultValue::new(ResultTypeValOk::<T>::ty(), std::result::Result::Ok(Some(T::into_value(x)?)))?)),
+            std::result::Result::Err(()) => Ok(Value::Result(ResultValue::new(ResultTypeValOk::<T>::ty(), std::result::Result::Err(None))?))
+        }
+    }
+}
+
+struct ResultTypeValErr<T: ComponentType>(T);
+
+impl<T: ComponentType> ResultTypeValErr<T> {
+    fn ty() -> ResultType {
+        static TY: OnceCell<ResultType> = OnceCell::new();
+        TY.get_or_init(|| ResultType::new(None, Some(T::ty()))).clone()
+    }
+}
+
+impl<T: ComponentType> ComponentType for Result<(), T> {
+    fn ty() -> ValueType {
+        ValueType::Result(ResultTypeValErr::<T>::ty())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match &**require_matches!(value, Value::Result(x), x) {
+            std::result::Result::Ok(None) => Ok(std::result::Result::Ok(())),
+            std::result::Result::Err(Some(v)) => Ok(std::result::Result::Err(T::from_value(v)?)),
+            _ => bail!("Incorrect result type.")
+        }
+    }
+
+    fn into_value(self) -> Result<Value> {
+        match self {
+            std::result::Result::Ok(()) => Ok(Value::Result(ResultValue::new(ResultTypeValErr::<T>::ty(), std::result::Result::Ok(None))?)),
+            std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(ResultTypeValErr::<T>::ty(), std::result::Result::Err(Some(T::into_value(v)?)))?))
+        }
+    }
+}
+
+struct ResultTypeValTwo<U: ComponentType, V: ComponentType>(U, V);
+
+impl<U: ComponentType, V: ComponentType> ResultTypeValTwo<U, V> {
+    fn ty() -> ResultType {
+        static TY: OnceCell<ResultType> = OnceCell::new();
+        TY.get_or_init(|| ResultType::new(Some(U::ty()), Some(V::ty()))).clone()
+    }
+}
+
+impl<U: ComponentType, V: ComponentType> ComponentType for Result<U, V> {
+    fn ty() -> ValueType {
+        ValueType::Result(ResultTypeValTwo::<U, V>::ty())
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match &**require_matches!(value, Value::Result(x), x) {
+            std::result::Result::Ok(Some(u)) => Ok(std::result::Result::Ok(U::from_value(u)?)),
+            std::result::Result::Err(Some(v)) => Ok(std::result::Result::Err(V::from_value(v)?)),
+            _ => bail!("Incorrect result type.")
+        }
+    }
+
+    fn into_value(self) -> Result<Value> {
+        match self {
+            std::result::Result::Ok(u) => Ok(Value::Result(ResultValue::new(ResultTypeValTwo::<U, V>::ty(), std::result::Result::Ok(Some(U::into_value(u)?)))?)),
+            std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(ResultTypeValTwo::<U, V>::ty(), std::result::Result::Err(Some(V::into_value(v)?)))?))
+        }
     }
 }
 
 impl<T: ComponentType> ComponentType for Vec<T> {
     fn ty() -> ValueType {
-        ValueType::List(ListType::new(T::ty()))
+        static TY: OnceCell<ValueType> = OnceCell::new();
+        TY.get_or_init(|| ValueType::List(ListType::new(T::ty()))).clone()
     }
-}
 
-impl<T: ComponentType> TryFrom<&Value> for Vec<T> {
-    type Error = Error;
-
-    fn try_from(value: &Value) -> Result<Self> {
+    fn from_value(value: &Value) -> Result<Self> {
         let list = require_matches!(value, Value::List(x), x);
 
         let id = TypeId::of::<T>();
@@ -960,17 +1126,13 @@ impl<T: ComponentType> TryFrom<&Value> for Vec<T> {
         } else {
             require_matches!(&list.values, ListSpecialization::Other(x), x)
                 .into_iter()
-                .map(|x| T::try_from(x))
+                .map(|x| T::from_value(x))
                 .collect::<Result<_>>()?
         })
     }
-}
 
-impl<T: ComponentType> TryFrom<Vec<T>> for Value {
-    type Error = Error;
-
-    fn try_from(value: Vec<T>) -> Result<Self> {
-        let holder = Box::new(value) as Box<dyn Any>;
+    fn into_value(self) -> Result<Value> {
+        let holder = Box::new(self) as Box<dyn Any>;
         let id = TypeId::of::<T>();
         Ok(Value::List(if id == TypeId::of::<bool>() {
             List {
@@ -1088,7 +1250,7 @@ impl<T: ComponentType> TryFrom<Vec<T>> for Value {
                         .downcast::<Vec<T>>()
                         .expect("Could not downcast vector.")
                         .into_iter()
-                        .map(|x| x.try_into())
+                        .map(|x| x.into_value())
                         .collect::<Result<_>>()?,
                 ),
             }
