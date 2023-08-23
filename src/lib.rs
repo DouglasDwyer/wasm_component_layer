@@ -1,7 +1,7 @@
 #![deny(warnings)]
 #![forbid(unsafe_code)]
-//#![warn(missing_docs)]
-//#![warn(clippy::missing_docs_in_private_items)]
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
 
 //! Crate documentation
 
@@ -79,6 +79,7 @@ impl Component {
         engine: &Engine<E>,
         bytes: &[u8],
     ) -> Result<(ComponentInner, wasmtime_environ::component::ComponentTypes)> {
+        /// A counter that uniquely identifies components.
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let decoded = wit_component::decode(bytes)
@@ -768,6 +769,7 @@ struct ComponentInner {
     pub export_names: FxHashMap<String, WorldKey>,
     /// The exports of the component.
     pub export_types: ComponentTypes,
+    /// Holds internal information for linking exports.
     pub export_info: ExportTypes,
     /// The memories that this component instantiates and references.
     pub extracted_memories: FxHashMap<RuntimeMemoryIndex, CoreExport<MemoryIndex>>,
@@ -1025,6 +1027,7 @@ impl Instance {
         component: &Component,
         linker: &Linker,
     ) -> Result<Self> {
+        /// A counter that uniquely identifies instances.
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
@@ -1548,6 +1551,7 @@ impl Instance {
             .ok_or_else(|| Error::msg(format!("Could not find function import {}", import.name)))
     }
 
+    /// Fills the resource tables with all resource destructors.
     fn fill_destructors(
         inner: InstanceInner,
         ctx: impl AsContext,
@@ -1593,13 +1597,17 @@ impl Instance {
     }
 }
 
+/// Provides the exports for an instance.
 #[derive(Debug)]
 pub struct Exports {
+    /// The root interface of this instance.
     root: ExportInstance,
+    /// All of this instance's exported interfaces.
     instances: FxHashMap<InterfaceIdentifier, ExportInstance>,
 }
 
 impl Exports {
+    /// Creates a new set of exports.
     pub(crate) fn new() -> Self {
         Self {
             root: ExportInstance::new(),
@@ -1607,14 +1615,17 @@ impl Exports {
         }
     }
 
+    /// Gets the root instance.
     pub fn root(&self) -> &ExportInstance {
         &self.root
     }
 
+    /// Gets the instance with the specified name, if any.
     pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ExportInstance> {
         self.instances.get(name)
     }
 
+    /// Gets an iterator over all instances by identifier.
     #[allow(clippy::needless_lifetimes)]
     pub fn instances<'a>(
         &'a self,
@@ -1623,13 +1634,17 @@ impl Exports {
     }
 }
 
+/// Represents a specific interface from a instance.
 #[derive(Debug)]
 pub struct ExportInstance {
+    /// The functions of the interface.
     functions: FxHashMap<Arc<str>, crate::func::Func>,
+    /// The resources of the interface.
     resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
 impl ExportInstance {
+    /// Creates a new, empty instance.
     pub(crate) fn new() -> Self {
         Self {
             functions: FxHashMap::default(),
@@ -1637,47 +1652,69 @@ impl ExportInstance {
         }
     }
 
+    /// Gets the associated function by name, if any.
     pub fn func(&self, name: impl AsRef<str>) -> Option<crate::func::Func> {
         self.functions.get(name.as_ref()).cloned()
     }
 
+    /// Iterates over all associated functions by name.
     pub fn funcs(&self) -> impl Iterator<Item = (&'_ str, crate::func::Func)> {
         self.functions.iter().map(|(k, v)| (&**k, v.clone()))
     }
 
+    /// Gets the associated abstract resource by name, if any.
     pub fn resource(&self, name: impl AsRef<str>) -> Option<ResourceType> {
         self.resources.get(name.as_ref()).cloned()
     }
 
+    /// Iterates over all associated functions by name.
     pub fn resources(&self) -> impl Iterator<Item = (&'_ str, ResourceType)> {
         self.resources.iter().map(|(k, v)| (&**k, v.clone()))
     }
 }
 
+/// Stores the internal state for an instance.
 #[derive(Debug)]
 struct InstanceInner {
+    /// The component from which this instance was created.
     pub component: Component,
+    /// The exports of this instance.
     pub exports: Exports,
+    /// The unique ID of this instance.
     pub id: u64,
+    /// The flags associated with this instance.
     pub instance_flags: wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>,
+    /// The underlying instantiated WASM modules for this instance.
     pub instances: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, wasm_runtime_layer::Instance>,
+    /// The set of resource tables and destructors.
     pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    /// The list of types for this instance.
     pub types: Arc<[crate::types::ValueType]>,
 }
 
+/// Details an import for a component.
 #[derive(Clone, Debug)]
 struct ComponentImport {
+    /// The interface from which this export originates.
     pub instance: Option<InterfaceIdentifier>,
+    /// The name of the import.
     pub name: Arc<str>,
+    /// The function associated with the import.
     pub func: Function,
+    /// The canonical options with which the import will be called.
     pub options: CanonicalOptions,
 }
 
+/// Details an export from a component.
 #[derive(Clone, Debug)]
 struct ComponentExport {
+    /// The canonical options with which the export will be called.
     pub options: CanonicalOptions,
+    /// The function associated with the export.
     pub func: Function,
+    /// The definition of the export.
     pub def: CoreExport<wasmtime_environ::EntityIndex>,
+    /// The type of export.
     pub ty: crate::types::FuncType,
 }
 
@@ -1698,6 +1735,7 @@ pub struct Store<T, E: backend::WasmEngine> {
 impl<T, E: backend::WasmEngine> Store<T, E> {
     /// Creates a new [`Store`] with a specific [`Engine`].
     pub fn new(engine: &Engine<E>, data: T) -> Self {
+        /// A counter that uniquely identifies stores.
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut inner = wasm_runtime_layer::Store::new(

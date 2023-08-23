@@ -14,35 +14,61 @@ use crate::require_matches::require_matches;
 use crate::types::*;
 use crate::AsContext;
 
+/// Represents a component model type.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
+    /// A boolean value.
     Bool(bool),
+    /// An eight-bit signed integer.
     S8(i8),
+    /// An eight-bit unsigned integer.
     U8(u8),
+    /// A 16-bit signed integer.
     S16(i16),
+    /// A 16-bit unsigned integer.
     U16(u16),
+    /// A 32-bit signed integer.
     S32(i32),
+    /// A 32-bit unsigned integer.
     U32(u32),
+    /// A 64-bit signed integer.
     S64(i64),
+    /// A 64-bit unsigned integer.
     U64(u64),
+    /// A 32-bit floating point number.
     F32(f32),
+    /// A 64-bit floating point number.
     F64(f64),
+    /// A UTF-8 character.
     Char(char),
+    /// A string.
     String(Arc<str>),
+    /// A homogenous list of elements.
     List(List),
+    /// A record with heterogenous fields.
     Record(Record),
+    /// A tuple with heterogenous fields.
     Tuple(Tuple),
+    /// A variant which may be one of multiple types or cases.
     Variant(Variant),
+    /// An enum which may be one of multiple cases.
     Enum(Enum),
+    /// An union which may be one of multiple types.
     Union(Union),
+    /// A type which may or may not have an underlying value.
     Option(OptionValue),
+    /// A type that indicates success or failure.
     Result(ResultValue),
+    /// A set of boolean values.
     Flags(Flags),
+    /// An owned resource handle.
     Own(ResourceOwn),
+    /// A borrowed resource handle.
     Borrow(ResourceBorrow),
 }
 
 impl Value {
+    /// Gets the type of this value.
     pub fn ty(&self) -> ValueType {
         match self {
             Value::Bool(_) => ValueType::Bool,
@@ -133,13 +159,18 @@ impl_primitive_from!((bool, Bool)(i8, S8)(u8, U8)(i16, S16)(u16, U16)(i32, S32)(
     u32, U32
 )(i64, S64)(u64, U64)(f32, F32)(f64, F64)(char, Char));
 
+/// Represents a list of values, all of the same type.
 #[derive(Clone, Debug)]
 pub struct List {
+    /// The underlying representation of the list.
     values: ListSpecialization,
+    /// The type of the list.
     ty: ListType,
 }
 
 impl List {
+    /// Creates a new list with the provided values. Every value must match
+    /// the element in the given list type.
     pub fn new(ty: ListType, values: impl IntoIterator<Item = Value>) -> Result<Self> {
         let values = match ty.element_ty() {
             ValueType::Bool => bool::from_value_iter(values)?,
@@ -169,10 +200,14 @@ impl List {
         Ok(Self { values, ty })
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> ListType {
         self.ty.clone()
     }
 
+    /// Casts this list to a strongly-typed slice, if possible. For performance
+    /// reasons, lists are specialized to store primitive types without any
+    /// wrappers or indirection. This function allows one to access that representation.
     pub fn typed<T: ListPrimitive>(&self) -> Result<&[T]> {
         if self.ty.element_ty() == T::ty() {
             Ok(T::from_specialization(&self.values))
@@ -185,10 +220,17 @@ impl List {
         }
     }
 
+    /// Gets an iterator over the values in the list.
+    pub fn iter(&self) -> impl '_ + Iterator<Item = Value> {
+        self.into_iter()
+    }
+
+    /// Whether this list is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Gets the length of the list.
     pub fn len(&self) -> usize {
         match &self.values {
             ListSpecialization::Bool(x) => x.len(),
@@ -242,13 +284,18 @@ impl<T: ListPrimitive> From<Arc<[T]>> for List {
     }
 }
 
+/// An unordered collection of named fields, each associated with the values.
 #[derive(Clone, Debug)]
 pub struct Record {
+    /// The internal set of keys and values, ordered lexicographically.
     fields: Arc<[(Arc<str>, Value)]>,
+    /// The type of this record.
     ty: RecordType,
 }
 
 impl Record {
+    /// Creates a new record out of the given fields. Each field must match with
+    /// the type given in the `RecordType`.
     pub fn new<S: Into<Arc<str>>>(
         ty: RecordType,
         values: impl IntoIterator<Item = (S, Value)>,
@@ -279,6 +326,7 @@ impl Record {
         })
     }
 
+    /// Constructs a record from the provided fields, dynamically determining the type.
     pub fn from_fields<S: Into<Arc<str>>>(
         values: impl IntoIterator<Item = (S, Value)>,
     ) -> Result<Self> {
@@ -293,14 +341,22 @@ impl Record {
         Ok(Self { fields, ty })
     }
 
+    /// Gets the field with the provided name, if any.
+    pub fn field(&self, field: impl AsRef<str>) -> Option<Value> {
+        self.fields.iter().filter_map(|(name, val)| (&**name == field.as_ref()).then(|| val.clone())).next()
+    }
+
+    /// Gets an iterator over the fields of this record.
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&str, Value)> {
         self.fields.iter().map(|(name, val)| (&**name, val.clone()))
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> RecordType {
         self.ty.clone()
     }
 
+    /// Creates a new record from the already-sorted list of values.
     pub(crate) fn from_sorted(
         ty: RecordType,
         values: impl IntoIterator<Item = (Arc<str>, Value)>,
@@ -318,13 +374,18 @@ impl PartialEq for Record {
     }
 }
 
+/// An ordered, unnamed sequence of heterogenously-typed values.
 #[derive(Clone, Debug)]
 pub struct Tuple {
+    /// The fields of this tuple.
     fields: Arc<[Value]>,
+    /// The type of the tuple.
     ty: TupleType,
 }
 
 impl Tuple {
+    /// Creates a new tuple of the given type, from the provided fields. Fails if the provided
+    /// fields do not match the specified type.
     pub fn new(ty: TupleType, fields: impl IntoIterator<Item = Value>) -> Result<Self> {
         Ok(Self {
             fields: fields
@@ -341,16 +402,19 @@ impl Tuple {
         })
     }
 
+    /// Creates a new tuple from the provided fields, inferring the type.
     pub fn from_fields(fields: impl IntoIterator<Item = Value>) -> Self {
         let fields: Arc<_> = fields.into_iter().collect();
         let ty = TupleType::new(fields.iter().map(|x| x.ty()));
         Self { fields, ty }
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> TupleType {
         self.ty.clone()
     }
 
+    /// Creates a new tuple of the given type without any typechecking.
     pub(crate) fn new_unchecked(ty: TupleType, fields: impl IntoIterator<Item = Value>) -> Self {
         Self {
             fields: fields.into_iter().collect(),
@@ -391,14 +455,21 @@ impl<'a> IntoIterator for &'a Tuple {
     }
 }
 
+/// A value that exists in one of multiple possible states. Each state may optionally
+/// have a type associated with it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Variant {
+    /// Determines in which state this value exists.
     discriminant: u32,
+    /// The value of this variant.
     value: Option<Arc<Value>>,
+    /// The type of the variant.
     ty: VariantType,
 }
 
 impl Variant {
+    /// Creates a new variant for the given discriminant and optional value. The value's type
+    /// must match the variant's type for the selected state.
     pub fn new(ty: VariantType, discriminant: usize, value: Option<Value>) -> Result<Self> {
         ensure!(
             discriminant < ty.cases().len(),
@@ -415,26 +486,34 @@ impl Variant {
         })
     }
 
+    /// Gets the index that describes in which state this value exists.
     pub fn discriminant(&self) -> usize {
         self.discriminant as usize
     }
 
+    /// Gets the typed value associated with the current state, if any.
     pub fn value(&self) -> Option<Value> {
         self.value.as_ref().map(|x| (**x).clone())
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> VariantType {
         self.ty.clone()
     }
 }
 
+/// A value that may exist in one of multiple possible states.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Enum {
+    /// Determines in which state this value exists.
     discriminant: u32,
+    /// The type of the enum.
     ty: EnumType,
 }
 
 impl Enum {
+    /// Creates a new enum value with the given discriminant. The discriminant must be
+    /// in range with respect to the enum type.
     pub fn new(ty: EnumType, discriminant: usize) -> Result<Self> {
         ensure!(
             discriminant < ty.cases().len(),
@@ -446,23 +525,31 @@ impl Enum {
         })
     }
 
+    /// Gets the index that describes in which state this value exists.
     pub fn discriminant(&self) -> usize {
         self.discriminant as usize
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> EnumType {
         self.ty.clone()
     }
 }
 
+/// A value that exists in one of multiple possible states, with an associated type.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Union {
+    /// Determines in which state this value exists.
     discriminant: u32,
+    /// The value of this union.
     value: Arc<Value>,
+    /// The type of this union.
     ty: UnionType,
 }
 
 impl Union {
+    /// Creates a new union for the given discriminant and value. The value's type
+    /// must match the union's type for the selected state.
     pub fn new(ty: UnionType, discriminant: usize, value: Value) -> Result<Self> {
         ensure!(
             discriminant < ty.cases().len(),
@@ -480,26 +567,33 @@ impl Union {
         })
     }
 
+    /// Gets the index that describes in which state this value exists.
     pub fn discriminant(&self) -> usize {
         self.discriminant as usize
     }
 
+    /// Gets the typed value associated with the current state.
     pub fn value(&self) -> Value {
         (*self.value).clone()
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> UnionType {
         self.ty.clone()
     }
 }
 
+/// Represents a value or lack thereof.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OptionValue {
+    /// The type of this option.
     ty: OptionType,
+    /// The value, if any.
     value: Arc<Option<Value>>,
 }
 
 impl OptionValue {
+    /// Creates a new option with the given type and value.
     pub fn new(ty: OptionType, value: Option<Value>) -> Result<Self> {
         ensure!(
             value
@@ -514,6 +608,7 @@ impl OptionValue {
         })
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> OptionType {
         self.ty.clone()
     }
@@ -527,13 +622,18 @@ impl Deref for OptionValue {
     }
 }
 
+/// Denotes a successful or unsuccessful operation, associated optionally with types.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResultValue {
+    /// The type of this result.
     ty: ResultType,
+    /// The value of this result.
     value: Arc<Result<Option<Value>, Option<Value>>>,
 }
 
 impl ResultValue {
+    /// Creates a new result from the provided type and value. The value must match that which
+    /// is described in the type.
     pub fn new(ty: ResultType, value: Result<Option<Value>, Option<Value>>) -> Result<Self> {
         ensure!(
             match &value {
@@ -548,6 +648,7 @@ impl ResultValue {
         })
     }
 
+    /// The type of this result.
     pub fn ty(&self) -> ResultType {
         self.ty.clone()
     }
@@ -561,13 +662,17 @@ impl Deref for ResultValue {
     }
 }
 
+/// A finite set of boolean flags that may be `false` or `true`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flags {
+    /// The type of this flags list.
     ty: FlagsType,
+    /// The internal representation of the flags.
     flags: FlagsList,
 }
 
 impl Flags {
+    /// Creates a new, zeroed set of flags.
     pub fn new(ty: FlagsType) -> Self {
         let names = ty.names().len() as u32;
         Self {
@@ -580,10 +685,12 @@ impl Flags {
         }
     }
 
+    /// Gets the value of the flag with the given name.
     pub fn get(&self, name: impl AsRef<str>) -> bool {
         self.get_index(self.index_of(name))
     }
 
+    /// Gets the value of the flag with the given index.
     pub fn get_index(&self, index: usize) -> bool {
         let index = index as u32;
         match &self.flags {
@@ -598,10 +705,12 @@ impl Flags {
         }
     }
 
+    /// Sets the value of the flag with the given name.
     pub fn set(&mut self, name: impl AsRef<str>, value: bool) {
         self.set_index(self.index_of(name), value)
     }
 
+    /// Sets the value of the flag with the given index.
     pub fn set_index(&mut self, index: usize, value: bool) {
         let index = index as u32;
         match &mut self.flags {
@@ -626,14 +735,17 @@ impl Flags {
         }
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> FlagsType {
         self.ty.clone()
     }
 
+    /// Creates a new flags list from the provided raw parts.
     pub(crate) fn new_unchecked(ty: FlagsType, flags: FlagsList) -> Self {
         Self { ty, flags }
     }
 
+    /// Gets the list of flags represented as a slice of `u32` values.
     pub(crate) fn as_u32_list(&self) -> &[u32] {
         match &self.flags {
             FlagsList::Single(x) => std::slice::from_ref(x),
@@ -641,6 +753,7 @@ impl Flags {
         }
     }
 
+    /// Gets the flag index associated with the provided name.
     fn index_of(&self, name: impl AsRef<str>) -> usize {
         *self
             .ty
@@ -650,22 +763,32 @@ impl Flags {
     }
 }
 
+/// Internally represents a set of bitflags.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FlagsList {
+    /// A group of bitflags less than or equal to one `u32` in length.
     Single(u32),
+    /// A group of bitflags bigger than a `u32`.
     Multiple(Arc<Vec<u32>>),
 }
 
+/// Represents a resource that is owned by the host.
 #[derive(Clone, Debug)]
 pub struct ResourceOwn {
+    /// A tracker that determines when this resource is borrowed or dropped.
     tracker: Arc<AtomicUsize>,
+    /// The representation for the resource.
     rep: i32,
+    /// The destructor for the resource, if any.
     destructor: Option<wasm_runtime_layer::Func>,
+    /// The store with which the resource was created.
     store_id: u64,
+    /// The type of the resource.
     ty: ResourceType,
 }
 
 impl ResourceOwn {
+    /// Creates a new resource for the given value. The value must match the resource type, which must be a host resource type.
     pub fn new<T: 'static + Send + Sync + Sized>(mut ctx: impl AsContextMut, value: T, ty: ResourceType) -> Result<Self> {
         let mut store_ctx = ctx.as_context_mut();
         let store_id = store_ctx.inner.data().id;
@@ -675,12 +798,13 @@ impl ResourceOwn {
         Ok(Self {
             tracker: Arc::default(),
             rep,
-            destructor: None,
+            destructor: match ty.host_destructor().expect("Could not get host destructor value.") { Some(x) => Some(x), None => store_ctx.inner.data().drop_host_resource.clone() },
             store_id,
             ty,
         })
     }
 
+    /// Creates a new owned resource that is received from a guest.
     pub(crate) fn new_guest(
         rep: i32,
         ty: ResourceType,
@@ -696,6 +820,7 @@ impl ResourceOwn {
         }
     }
 
+    /// Creates a borrow of this owned resource. The resulting borrow must be manually released via [`ResourceBorrow::drop`] afterward.
     pub fn borrow(&self, ctx: impl crate::AsContextMut) -> Result<ResourceBorrow> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
@@ -714,18 +839,51 @@ impl ResourceOwn {
         })
     }
 
-    pub fn rep(&self, ctx: impl AsContext) -> Result<i32> {
+    /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
+    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(&self, ctx: &'a crate::StoreContext<T, E>) -> Result<&'a T> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
-        Ok(self.rep)
+        ensure!(
+            self.tracker.load(Ordering::Acquire) < usize::MAX,
+            "Resource was already destroyed."
+        );
+
+        if self.ty.host_destructor().is_some() {
+            ctx.inner.data().host_resources.get(self.rep as usize).expect("Resource was not present.").downcast_ref().context("Resource was not of requested type.")
+        }
+        else {
+            bail!("Cannot get the representation for a guest-owned resource.");
+        }
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> ResourceType {
         self.ty.clone()
     }
 
+    /// Removes this resource from the context without invoking the destructor, and returns the value.
+    /// Fails if this is not a host resource, or if the resource is borrowed.
+    pub fn take<T: 'static + Send + Sync>(&self, mut ctx: impl crate::AsContextMut) -> Result<()> {
+        ensure!(
+            self.store_id == ctx.as_context().inner.data().id,
+            "Incorrect store."
+        );
+        ensure!(
+            self.tracker.load(Ordering::Acquire) == 0,
+            "Resource had remaining borrows or was already dropped."
+        );
+
+        ensure!(self.ty.host_destructor().is_some(), "Resource did not originate from host.");
+
+        ensure!(ctx.as_context_mut().inner.data_mut().host_resources.get(self.rep as usize).expect("Resource was not present.").is::<T>(), "Resource was of incorrect type.");
+
+        *ctx.as_context_mut().inner.data_mut().host_resources.remove(self.rep as usize).downcast().expect("Could not downcast resource.")
+    }
+
+    /// Drops this resource and invokes the destructor, removing it from the context.
+    /// Fails if the resource is borrowed or already destroyed.
     pub fn drop(&self, mut ctx: impl crate::AsContextMut) -> Result<()> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
@@ -748,6 +906,7 @@ impl ResourceOwn {
         Ok(())
     }
 
+    /// Lowers this owned resource into a guest context.
     pub(crate) fn lower(&self, ctx: impl crate::AsContextMut) -> Result<i32> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
@@ -768,16 +927,25 @@ impl PartialEq for ResourceOwn {
     }
 }
 
+/// Represents a resource that is borrowed by the host. If this borrow originated from a host-owned resource,
+/// then it must be manually released via [`ResourceBorrow::drop`], or the owned resource will be considered
+/// borrowed indefinitely.
 #[derive(Clone, Debug)]
 pub struct ResourceBorrow {
+    /// Whether this resource borrow has been destroyed.
     dead: Arc<AtomicBool>,
+    /// The original host resource handle, if any.
     host_tracker: Option<Arc<AtomicUsize>>,
+    /// The representation of this resource.
     rep: i32,
+    /// The store ID of this resource.
     store_id: u64,
+    /// The type of this resource.
     ty: ResourceType,
 }
 
 impl ResourceBorrow {
+    /// Creates a new borrowed resource.
     pub(crate) fn new(rep: i32, store_id: u64, ty: ResourceType) -> Self {
         Self {
             dead: Arc::default(),
@@ -788,18 +956,31 @@ impl ResourceBorrow {
         }
     }
 
-    pub fn rep(&self, ctx: impl AsContext) -> Result<i32> {
+    /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
+    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(&self, ctx: &'a crate::StoreContext<T, E>) -> Result<&'a T> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
-        Ok(self.rep)
+        ensure!(
+            !self.dead.load(Ordering::Acquire),
+            "Borrow was already dropped."
+        );
+
+        if self.ty.host_destructor().is_some() {
+            ctx.inner.data().host_resources.get(self.rep as usize).expect("Resource was not present.").downcast_ref().context("Resource was not of requested type.")
+        }
+        else {
+            bail!("Cannot get the representation for a guest-owned resource.");
+        }
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> ResourceType {
         self.ty.clone()
     }
 
+    /// Drops this borrow. Fails if this was not a manual borrow of a host resource.
     pub fn drop(&self, ctx: impl crate::AsContextMut) -> Result<()> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
@@ -817,6 +998,7 @@ impl ResourceBorrow {
         Ok(())
     }
 
+    /// Lowers this borrow into its representation.
     pub(crate) fn lower(&self, ctx: impl crate::AsContextMut) -> Result<i32> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
@@ -829,6 +1011,7 @@ impl ResourceBorrow {
         Ok(self.rep)
     }
 
+    /// Gets a reference to the tracker that determines if this resource is dead.
     pub(crate) fn dead_ref(&self) -> Arc<AtomicBool> {
         self.dead.clone()
     }
@@ -840,11 +1023,15 @@ impl PartialEq for ResourceBorrow {
     }
 }
 
+/// A type which can convert itself to and from component model values.
 pub trait ComponentType: 'static + Sized {
+    /// Gets the component model type for instances of `Self`.
     fn ty() -> ValueType;
 
+    /// Attempts to create an instance of `Self` from a component model value.
     fn from_value(value: &Value) -> Result<Self>;
 
+    /// Attempts to convert `Self` into a component model value.
     fn into_value(self) -> Result<Value>;
 }
 
@@ -914,10 +1101,12 @@ impl ComponentType for Arc<str> {
     }
 }
 
+/// Holds an instantiated copy of the type.
 struct OptionTypeVal<T: ComponentType>(T);
 
 impl<T: ComponentType> OptionTypeVal<T> {
     fn ty() -> OptionType {
+        /// Holds an instantiated copy of the type.
         static TY: OnceCell<OptionType> = OnceCell::new();
         TY.get_or_init(|| OptionType::new(T::ty())).clone()
     }
@@ -962,10 +1151,13 @@ impl<T: ComponentType> ComponentType for Box<T> {
     }
 }
 
+/// Holds an instantiated copy of the type.
 struct ResultTypeValOk<T: ComponentType>(T);
 
 impl<T: ComponentType> ResultTypeValOk<T> {
+    /// Gets an instantiated copy of the type.
     fn ty() -> ResultType {
+        /// Holds an instantiated copy of the type.
         static TY: OnceCell<ResultType> = OnceCell::new();
         TY.get_or_init(|| ResultType::new(Some(T::ty()), None)).clone()
     }
@@ -992,10 +1184,13 @@ impl<T: ComponentType> ComponentType for Result<T, ()> {
     }
 }
 
+/// Holds an instantiated copy of the type.
 struct ResultTypeValErr<T: ComponentType>(T);
 
 impl<T: ComponentType> ResultTypeValErr<T> {
+    /// Gets an instantiated copy of the type.
     fn ty() -> ResultType {
+        /// Holds an instantiated copy of the type.
         static TY: OnceCell<ResultType> = OnceCell::new();
         TY.get_or_init(|| ResultType::new(None, Some(T::ty()))).clone()
     }
@@ -1022,10 +1217,13 @@ impl<T: ComponentType> ComponentType for Result<(), T> {
     }
 }
 
+/// Holds an instantiated copy of the type.
 struct ResultTypeValTwo<U: ComponentType, V: ComponentType>(U, V);
 
 impl<U: ComponentType, V: ComponentType> ResultTypeValTwo<U, V> {
+    /// Gets an instantiated copy of the type.
     fn ty() -> ResultType {
+        /// Holds an instantiated copy of the type.
         static TY: OnceCell<ResultType> = OnceCell::new();
         TY.get_or_init(|| ResultType::new(Some(U::ty()), Some(V::ty()))).clone()
     }
@@ -1054,6 +1252,7 @@ impl<U: ComponentType, V: ComponentType> ComponentType for Result<U, V> {
 
 impl<T: ComponentType> ComponentType for Vec<T> {
     fn ty() -> ValueType {
+        /// Holds an instantiated copy of the type.
         static TY: OnceCell<ValueType> = OnceCell::new();
         TY.get_or_init(|| ValueType::List(ListType::new(T::ty()))).clone()
     }
@@ -1257,23 +1456,38 @@ impl<T: ComponentType> ComponentType for Vec<T> {
     }
 }
 
+/// A module used to hide traits that are implementation details.
 mod private {
     use super::*;
 
+    /// The inner backing for a list, specialized over primitive types for efficient access.
     #[derive(Clone, Debug, PartialEq)]
     pub enum ListSpecialization {
+        /// A list of booleans.
         Bool(Arc<[bool]>),
+        /// A list of eight-bit signed integers.
         S8(Arc<[i8]>),
+        /// A list of eight-bit unsigned integers.
         U8(Arc<[u8]>),
+        /// A list of 16-bit signed integers.
         S16(Arc<[i16]>),
+        /// A list of 16-bit unsigned integers.
         U16(Arc<[u16]>),
+        /// A list of 32-bit signed integers.
         S32(Arc<[i32]>),
+        /// A list of 32-bit unsigned integers.
         U32(Arc<[u32]>),
+        /// A list of 64-bit signed integers.
         S64(Arc<[i64]>),
+        /// A list of 64-bit unsigned integers.
         U64(Arc<[u64]>),
+        /// A list of 32-bit floating point numbers.
         F32(Arc<[f32]>),
+        /// A list of 64-bit floating point numbers.
         F64(Arc<[f64]>),
+        /// A list of characters.
         Char(Arc<[char]>),
+        /// A list of other, non-specialized values.
         Other(Arc<[Value]>),
     }
 
@@ -1301,19 +1515,33 @@ mod private {
         }
     }
 
+    /// An iterator over specialized list values that yields `Value`s.
     pub enum ListSpecializationIter<'a> {
+        /// An iterator over booleans.
         Bool(std::slice::Iter<'a, bool>),
+        /// An iterator over eight-bit signed integers.
         S8(std::slice::Iter<'a, i8>),
+        /// An iterator over eight-bit unsigned integers.
         U8(std::slice::Iter<'a, u8>),
+        /// An iterator over 16-bit signed integers.
         S16(std::slice::Iter<'a, i16>),
+        /// An iterator over 16-bit unsigned integers.
         U16(std::slice::Iter<'a, u16>),
+        /// An iterator over 32-bit signed integers.
         S32(std::slice::Iter<'a, i32>),
+        /// An iterator over 32-bit unsigned integers.
         U32(std::slice::Iter<'a, u32>),
+        /// An iterator over 64-bit signed integers.
         S64(std::slice::Iter<'a, i64>),
+        /// An iterator over 64-bit unsigned integers.
         U64(std::slice::Iter<'a, u64>),
+        /// An iterator over 32-bit floating point numbers.
         F32(std::slice::Iter<'a, f32>),
+        /// An iterator over 64-bit floating point numbers.
         F64(std::slice::Iter<'a, f64>),
+        /// An iterator over characters.
         Char(std::slice::Iter<'a, char>),
+        /// An iterator over unspecialized values.
         Other(std::slice::Iter<'a, Value>),
     }
 
@@ -1339,12 +1567,15 @@ mod private {
         }
     }
 
+    /// Denotes a type that can be stored in a specialized list contiguously.
     pub trait ListPrimitive: Copy + Sized {
+        /// Creates a list specialization from a reference to a slice of this kind of value.
         fn from_arc(arc: Arc<[Self]>) -> ListSpecialization;
+        /// Attempts to create a list specialization from an iterator over this kind of value.
         fn from_value_iter(iter: impl IntoIterator<Item = Value>) -> Result<ListSpecialization>;
-
+        /// Gets the slice of primitive values of this type from the given list, or panics.
         fn from_specialization(specialization: &ListSpecialization) -> &[Self];
-
+        /// Gets the type of this value.
         fn ty() -> ValueType;
     }
 

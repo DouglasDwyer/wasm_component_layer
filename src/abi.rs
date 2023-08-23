@@ -6,6 +6,7 @@ use anyhow::*;
 pub use wit_parser::abi::{AbiVariant, WasmSignature, WasmType};
 use wit_parser::*;
 
+/// Joins two WASM types.
 fn join(a: WasmType, b: WasmType) -> WasmType {
     use WasmType::*;
 
@@ -18,6 +19,7 @@ fn join(a: WasmType, b: WasmType) -> WasmType {
     }
 }
 
+/// Aligns an address to a specific value.
 fn align_to(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
 }
@@ -83,6 +85,7 @@ macro_rules! def_instruction {
 }
 
 def_instruction! {
+    /// Describes an action to take in the ABI stack machine.
     #[derive(Debug)]
     pub enum Instruction<'a> {
         /// Acquires the specified parameter and places it on the stack.
@@ -468,20 +471,26 @@ def_instruction! {
     }
 }
 
+/// Describes a casting operation that should happen on a primitive type.
 #[derive(Debug, PartialEq)]
 pub enum Bitcast {
-    // Upcasts
+    /// Casts an `f32` to an `i32`.
     F32ToI32,
+    /// Casts an `f64` to an `i64`.
     F64ToI64,
+    /// Casts an `i32` to an `i64`.
     I32ToI64,
+    /// Casts an `f32` to an `i64`.
     F32ToI64,
-
-    // Downcasts
+    /// Casts an `i32` to an `f32`.
     I32ToF32,
+    /// Casts an `i64` to an `f64`.
     I64ToF64,
+    /// Casts an `i64` to an `i32`.
     I64ToI32,
+    /// Casts an `i64` to an `f32`.
     I64ToF32,
-
+    /// The identify operation.
     None,
 }
 
