@@ -1,9 +1,26 @@
+#![deny(warnings)]
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
+
+//! Crate documentation
+
+/// Implements the Canonical ABI conventions for converting between guest and host types.
 mod abi;
+
+/// Provides the ability to create and call component model functions.
 mod func;
+
+/// Defines identifiers for component packages and interfaces.
 mod identifier;
-#[macro_use]
+
+/// Defines a macro that will either pattern-match results or throw an error.
 mod require_matches;
+
+/// Defines all types related to the component model.
 mod types;
+
+/// Provides the ability to instantiate component model types.
 mod values;
 
 
@@ -27,9 +44,11 @@ use crate::require_matches::*;
 pub use crate::types::*;
 pub use crate::values::*;
 
+/// A parsed and validated WebAssembly component, which may be used to instantiate [`Instance`]s.
 pub struct Component(Arc<ComponentInner>);
 
 impl Component {
+    /// Creates a new component with the given engine and binary data.
     pub fn new<E: backend::WasmEngine>(engine: &Engine<E>, bytes: &[u8]) -> Result<Self> {
         let (inner, types) = Self::generate_component(engine, bytes)?;
         Ok(Self(Arc::new(Self::generate_resources(
@@ -37,14 +56,18 @@ impl Component {
         )?)))
     }
 
+    /// The types and interfaces exported by this component.
     pub fn exports(&self) -> &ExportTypes {
         &self.0.export_types
     }
 
+    /// The types and interfaces imported by this component. To instantiate
+    /// the component, all of these imports must be satisfied by the [`Linker`].
     pub fn imports(&self) -> &ImportTypes {
         &self.0.import_types
     }
 
+    /// Parses the given bytes into a component, and creates an uninitialized component backing.
     fn generate_component<E: backend::WasmEngine>(
         engine: &Engine<E>,
         bytes: &[u8],
@@ -119,6 +142,7 @@ impl Component {
         ))
     }
 
+    /// Creates a mapping from module index to entities, used to resolve component exports at link-time.
     fn generate_export_mapping(
         module_data: &wasmtime_environ::PrimaryMap<
             StaticModuleIndex,
@@ -139,6 +163,7 @@ impl Component {
         export_mapping
     }
 
+    /// Fills in the abstract resource types for the given component.
     fn generate_resources(mut inner: ComponentInner) -> Result<ComponentInner> {
         for (_key, item) in &inner.resolve.worlds[inner.world_id].imports {
             match item {
@@ -223,6 +248,7 @@ impl Component {
         Ok(inner)
     }
 
+    /// Parses all package identifiers.
     fn generate_package_identifiers(resolve: &Resolve) -> Result<Vec<PackageIdentifier>> {
         let mut res = Vec::with_capacity(resolve.packages.len());
 
@@ -233,6 +259,7 @@ impl Component {
         Ok(res)
     }
 
+    /// Generates a mapping from interface ID to parsed interface identifier.
     fn generate_interface_identifiers(
         resolve: &Resolve,
         packages: &[PackageIdentifier],
@@ -255,6 +282,7 @@ impl Component {
         Ok(res)
     }
 
+    /// Fills in all initialization data for the component.
     fn extract_initializers(
         mut inner: ComponentInner,
         types: &ComponentTypes,
@@ -404,6 +432,8 @@ impl Component {
         Ok(inner)
     }
 
+    /// Creates a mapping from lowered functions to trampoline data,
+    /// and records any auxiliary trampolines in the map.
     fn get_lowering_options_and_extract_trampolines<'a>(
         trampolines: &'a wasmtime_environ::PrimaryMap<TrampolineIndex, Trampoline>,
         output_trampolines: &mut FxHashMap<TrampolineIndex, GeneratedTrampoline>,
@@ -439,6 +469,7 @@ impl Component {
         Ok(lowers)
     }
 
+    /// Translates the given bytes into component data and a set of core modules.
     fn translate_modules<'a>(
         bytes: &'a [u8],
         scope: &'a wasmtime_environ::ScopeVec<u8>,
@@ -458,6 +489,7 @@ impl Component {
         Ok((translation, modules, types.finish()))
     }
 
+    /// Fills in all of the exports for a component.
     fn load_exports(mut inner: ComponentInner, types: &ComponentTypes) -> Result<ComponentInner> {
         Self::export_names(&mut inner);
 
@@ -564,6 +596,7 @@ impl Component {
         Ok(inner)
     }
 
+    /// Fills in the mapping of export names to the exports' respective worlds.
     fn export_names(inner: &mut ComponentInner) {
         let to_iter = &inner.resolve.worlds[inner.world_id].exports;
         let mut exports = FxHashMap::with_capacity_and_hasher(to_iter.len(), Default::default());
@@ -574,6 +607,8 @@ impl Component {
         inner.export_names = exports;
     }
 
+    /// Updates the mapping from type IDs to table indices based upon the resources
+    /// referenced by the provided function.
     fn update_resource_map(
         resolve: &Resolve,
         types: &wasmtime_environ::component::ComponentTypes,
@@ -591,6 +626,8 @@ impl Component {
         }
     }
 
+    /// Inspects the given type (and any referenced subtypes) for resources,
+    /// and records the table indices of those resources in the map.
     fn connect_resources(
         resolve: &Resolve,
         types: &wasmtime_environ::component::ComponentTypes,
@@ -658,6 +695,7 @@ impl Component {
         }
     }
 
+    /// Creates a validator with the appropriate settings for component model resolution.
     fn create_component_validator() -> wasmtime_environ::wasmparser::Validator {
         wasmtime_environ::wasmparser::Validator::new_with_features(
             wasmtime_environ::wasmparser::WasmFeatures {
@@ -686,26 +724,44 @@ impl Component {
     }
 }
 
+/// Holds the inner, immutable state of an instantiated component.
 struct ComponentInner {
+    /// Maps from module indices to export indices for linking.
     pub export_mapping:
         FxHashMap<StaticModuleIndex, FxHashMap<wasmtime_environ::EntityIndex, String>>,
+    /// Maps between export names and world keys.
     pub export_names: FxHashMap<String, WorldKey>,
+    /// The exports of the component.
     pub export_types: ExportTypes,
+    /// The memories that this component instantiates and references.
     pub extracted_memories: FxHashMap<RuntimeMemoryIndex, CoreExport<MemoryIndex>>,
+    /// The reallocation functions that this component instantiates and references.
     pub extracted_reallocs:
         FxHashMap<RuntimeReallocIndex, CoreExport<wasmtime_environ::EntityIndex>>,
+    /// The post-return functions that this component instantiates and references.
     pub extracted_post_returns:
         FxHashMap<RuntimePostReturnIndex, CoreExport<wasmtime_environ::EntityIndex>>,
+    /// A mapping from type indices to resource table indices.
     pub resource_map: Vec<TypeResourceTableIndex>,
+    /// The set of trampolines required to use this resource.
     pub generated_trampolines: FxHashMap<TrampolineIndex, GeneratedTrampoline>,
+    /// The component's globally-unique ID.
     pub id: u64,
+    /// The imports of the component.
     pub import_types: ImportTypes,
+    /// A mapping from runtime module indices to static indices.
     pub instance_modules: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, StaticModuleIndex>,
+    /// A mapping from interface ID to parsed identifier.
     pub interface_identifiers: Vec<InterfaceIdentifier>,
+    /// The translated modules of this component.
     pub modules: FxHashMap<StaticModuleIndex, ModuleTranslation>,
+    /// The resolved WIT of the component.
     pub resolve: Resolve,
+    /// The size and alignment of component types.
     pub size_align: SizeAlign,
+    /// The translated component data.
     pub translation: ComponentTranslation,
+    /// The ID of the primary exported world.
     pub world_id: Id<World>,
 }
 
@@ -715,19 +771,27 @@ impl std::fmt::Debug for ComponentInner {
     }
 }
 
+/// A translated module.
 struct ModuleTranslation {
+    /// The instantiated module that was translated.
     pub module: Module,
+    /// The translation data for the module.
     pub translation: wasmtime_environ::Module,
 }
 
+/// Details the set of types and functions exported by a component.
 #[derive(Debug)]
 pub struct ExportTypes {
+    /// The root instance for component exports.
     root: ExportTypesInstance,
+    /// The interfaces exported by the component.
     instances: FxHashMap<InterfaceIdentifier, ExportTypesInstance>,
+    /// The package identifier for the component.
     package: PackageIdentifier,
 }
 
 impl ExportTypes {
+    /// Creates a new export set for the given package.
     pub(crate) fn new(package: PackageIdentifier) -> Self {
         Self {
             root: ExportTypesInstance::new(),
@@ -736,18 +800,22 @@ impl ExportTypes {
         }
     }
 
+    /// Gets the root instance for this export set.
     pub fn root(&self) -> &ExportTypesInstance {
         &self.root
     }
 
+    /// The package associated with all exports.
     pub fn package(&self) -> &PackageIdentifier {
         &self.package
     }
 
+    /// Gets the exported instance with the provided identifier, if any.
     pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ExportTypesInstance> {
         self.instances.get(name)
     }
 
+    /// Gets an iterator over all exported instances.
     pub fn instances<'a>(
         &'a self,
     ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportTypesInstance)> {

@@ -9,7 +9,7 @@ use bytemuck::*;
 use wasm_runtime_layer::*;
 use wasmtime_environ::component::*;
 
-use crate::abi::*;
+use crate::abi::{Generator, *};
 use crate::types::{FuncType, ValueType};
 use crate::values::Value;
 use crate::{AsContext, AsContextMut, StoreContextMut, *};
