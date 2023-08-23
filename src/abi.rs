@@ -24,8 +24,8 @@ fn align_to(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
 }
 
-// Helper macro for defining instructions without having to have tons of
-// exhaustive `match` statements to update
+/// Helper macro for defining instructions without having to have tons of
+/// exhaustive `match` statements to update
 macro_rules! def_instruction {
     (
         $( #[$enum_attr:meta] )*
@@ -553,17 +553,28 @@ pub trait Bindgen {
     fn is_list_canonical(&self, element: &Type) -> bool;
 }
 
+/// Generates stack-based instructions for using the canonical ABI.
+/// 
+/// This code was adapted from the `wit-parser` crate.
 pub struct Generator<'a, B: Bindgen> {
+    /// The ABI variant to use.
     variant: AbiVariant,
+    /// The lift-lower type to use.
     lift_lower: LiftLower,
+    /// The bindgen to use.
     bindgen: &'a mut B,
+    /// The resolve to use.
     resolve: &'a Resolve,
+    /// The set of operands for this call.
     operands: Vec<B::Operand>,
+    /// The set of results for this call.
     results: Vec<B::Operand>,
+    /// The full stack.
     stack: Vec<B::Operand>,
 }
 
 impl<'a, B: Bindgen> Generator<'a, B> {
+    /// Creates a new generator.
     pub fn new(
         resolve: &'a Resolve,
         variant: AbiVariant,
@@ -581,6 +592,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
+    /// Calls the provided function with the generator.
     pub fn call(&mut self, func: &Function) -> Result<()> {
         let sig = self.resolve.wasm_signature(self.variant, func);
 
@@ -741,6 +753,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(())
     }
 
+    /// Emits the provided instruction.
     fn emit(&mut self, inst: &Instruction<'_>) -> Result<()> {
         self.operands.clear();
         self.results.clear();
@@ -771,6 +784,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(())
     }
 
+    /// Lowers the given type.
     fn lower(&mut self, ty: &Type) -> Result<()> {
         use Instruction::*;
 
@@ -888,6 +902,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
+    /// Lowers the given variant arm.
     fn lower_variant_arm<'b>(
         &mut self,
         ty: &Type,
@@ -954,6 +969,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(())
     }
 
+    /// Reallocates a list.
     fn list_realloc(&self) -> Option<&'static str> {
         // Lowering parameters calling a wasm import means
         // we don't need to pass ownership, but we pass
@@ -1132,6 +1148,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
+    /// Lifts a variant arm.
     fn lift_variant_arm<'b>(
         &mut self,
         ty: &Type,
@@ -1187,6 +1204,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
+    /// Writes a value to memory.
     fn write_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         use Instruction::*;
 
@@ -1295,6 +1313,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
+    /// Writes parameters to memory.
     fn write_params_to_memory<'b>(
         &mut self,
         params: impl IntoIterator<Item = &'b Type> + ExactSizeIterator,
@@ -1304,6 +1323,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.write_fields_to_memory(params, addr, offset)
     }
 
+    /// Writes a variant arm to memory.
     fn write_variant_arm_to_memory<'b>(
         &mut self,
         offset: i32,
@@ -1341,6 +1361,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(())
     }
 
+    /// Writes a list to memory.
     fn write_list_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         // After lowering the list there's two i32 values on the stack
         // which we write into memory, writing the pointer into the low address
@@ -1352,6 +1373,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.emit(&Instruction::I32Store { offset })
     }
 
+    /// Writes fields to memory.
     fn write_fields_to_memory<'b>(
         &mut self,
         tys: impl IntoIterator<Item = &'b Type> + ExactSizeIterator,
@@ -1375,12 +1397,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(())
     }
 
+    /// Lowers a type and emits an instruction.
     fn lower_and_emit(&mut self, ty: &Type, addr: B::Operand, instr: &Instruction) -> Result<()> {
         self.lower(ty)?;
         self.stack.push(addr);
         self.emit(instr)
     }
 
+    /// Reads a value from memory.
     fn read_from_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         use Instruction::*;
 
@@ -1524,6 +1548,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
+    /// Reads results from memory.
     fn read_results_from_memory(
         &mut self,
         results: &Results,
@@ -1533,6 +1558,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.read_fields_from_memory(results.iter_types(), addr, offset)
     }
 
+    /// Reads a variant arm from memory.
     fn read_variant_arm_from_memory<'b>(
         &mut self,
         offset: i32,
@@ -1567,6 +1593,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
+    /// Reads a list from memory.
     fn read_list_from_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         // Read the pointer/len and then perform the standard lifting
         // proceses.
@@ -1577,6 +1604,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.lift(ty)
     }
 
+    /// Reads the fields of a list from memory.
     fn read_fields_from_memory<'b>(
         &mut self,
         tys: impl IntoIterator<Item = &'b Type>,
@@ -1589,12 +1617,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         Ok(())
     }
 
+    /// Emits and lifts a variant.
     fn emit_and_lift(&mut self, ty: &Type, addr: B::Operand, instr: &Instruction) -> Result<()> {
         self.stack.push(addr);
         self.emit(instr)?;
         self.lift(ty)
     }
 
+    /// Loads a representation.
     fn load_intrepr(&mut self, offset: i32, repr: Int) -> Result<()> {
         self.emit(&match repr {
             Int::U64 => Instruction::I64Load { offset },
@@ -1604,6 +1634,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         })
     }
 
+    /// Stores a representation.
     fn store_intrepr(&mut self, offset: i32, repr: Int) -> Result<()> {
         self.emit(&match repr {
             Int::U64 => Instruction::I64Store { offset },
@@ -1614,6 +1645,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
     }
 }
 
+/// Generates a bitcast between two WASM types.
 fn cast(from: WasmType, to: WasmType) -> Bitcast {
     use WasmType::*;
 
@@ -1635,6 +1667,7 @@ fn cast(from: WasmType, to: WasmType) -> Bitcast {
     }
 }
 
+/// Pushes the WASM types used to describe the given type into the result vector.
 fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec<WasmType>) {
     match ty {
         Type::Bool
@@ -1731,6 +1764,7 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
     }
 }
 
+/// Pushes the WASM types used to represent variants into the given vector.
 fn push_wasm_variants<'a>(
     resolve: &Resolve,
     variant: AbiVariant,

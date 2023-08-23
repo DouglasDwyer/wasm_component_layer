@@ -3,14 +3,19 @@ use std::sync::*;
 use anyhow::*;
 use wit_parser::*;
 
+/// Uniquely identifies a WASM package within a registry.
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct PackageIdentifier {
+    /// The namespace of the package.
     namespace: Arc<str>,
+    /// The name of the package.
     name: Arc<str>,
+    /// The version of the package.
     version: Option<semver::Version>,
 }
 
 impl PackageIdentifier {
+    /// Creates a new package identifier for the given name, namespace, and version.
     pub fn new(
         namespace: impl Into<Arc<str>>,
         name: impl Into<Arc<str>>,
@@ -23,14 +28,17 @@ impl PackageIdentifier {
         }
     }
 
+    /// Gets the namespace of the package.
     pub fn namespace(&self) -> &str {
         &self.namespace
     }
 
+    /// Gets the name of the package.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Gets the version of the package, if any.
     pub fn version(&self) -> Option<&semver::Version> {
         self.version.as_ref()
     }
@@ -89,13 +97,17 @@ impl std::fmt::Debug for PackageIdentifier {
     }
 }
 
+/// Uniquely identifies a component model interface within a package.
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct InterfaceIdentifier {
+    /// The package ID.
     package: PackageIdentifier,
+    /// The name of the interface.
     name: Arc<str>,
 }
 
 impl InterfaceIdentifier {
+    /// Creates a new interface identifier for the given name and package.
     pub fn new(package: PackageIdentifier, name: impl Into<Arc<str>>) -> Self {
         Self {
             package,
@@ -103,10 +115,12 @@ impl InterfaceIdentifier {
         }
     }
 
+    /// Gets the identifier of the package.
     pub fn package(&self) -> &PackageIdentifier {
         &self.package
     }
 
+    /// Gets the name of the interface.
     pub fn name(&self) -> &str {
         &self.name
     }

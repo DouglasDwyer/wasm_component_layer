@@ -127,6 +127,7 @@ impl TryFrom<&wasm_runtime_layer::Value> for Value {
     }
 }
 
+/// Implements the `From` trait for primitive values.
 macro_rules! impl_primitive_from {
     ($(($type_name: ident, $enum_name: ident))*) => {
         $(
@@ -536,7 +537,7 @@ impl Enum {
     }
 }
 
-/// A value that exists in one of multiple possible states, with an associated type.
+/// A value that exists in one of multiple possible states, each with an associated type.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Union {
     /// Determines in which state this value exists.
@@ -1035,6 +1036,7 @@ pub trait ComponentType: 'static + Sized {
     fn into_value(self) -> Result<Value>;
 }
 
+/// Implements the `ComponentType` trait for primitive values.
 macro_rules! impl_primitive_component_type {
     ($(($type_name: ident, $enum_name: ident))*) => {
         $(
@@ -1105,6 +1107,7 @@ impl ComponentType for Arc<str> {
 struct OptionTypeVal<T: ComponentType>(T);
 
 impl<T: ComponentType> OptionTypeVal<T> {
+    /// Gets an instantiated copy of the type.
     fn ty() -> OptionType {
         /// Holds an instantiated copy of the type.
         static TY: OnceCell<OptionType> = OnceCell::new();
@@ -1579,6 +1582,7 @@ mod private {
         fn ty() -> ValueType;
     }
 
+    /// Implements the `ListPrimitive` trait for a primitive type.
     macro_rules! impl_list_primitive {
         ($(($type_name: ident, $enum_name: ident))*) => {
             $(

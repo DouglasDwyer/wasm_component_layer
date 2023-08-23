@@ -14,34 +14,53 @@ use crate::types::{FuncType, ValueType};
 use crate::values::Value;
 use crate::{AsContext, AsContextMut, StoreContextMut, *};
 
+/// Stores the backing implementation for a function.
 #[derive(Clone, Debug)]
 pub(crate) enum FuncImpl {
+    /// A function backed by a guest implementation.
     GuestFunc(Arc<GuestFunc>),
+    /// A host-provided function.
     HostFunc(Arc<AtomicUsize>),
 }
 
+/// Stores the data necessary to call a guest function.
 #[derive(Debug)]
 pub(crate) struct GuestFunc {
+    /// The core function to call.
     pub callee: wasm_runtime_layer::Func,
+    /// The component for this function.
     pub component: Arc<ComponentInner>,
+    /// The string encoding to use.
     pub encoding: StringEncoding,
+    /// The function definition to use.
     pub function: Function,
+    /// The memory to use.
     pub memory: Option<Memory>,
+    /// The reallocation function to use.
     pub realloc: Option<wasm_runtime_layer::Func>,
+    /// The post-return function to use.
     pub post_return: Option<wasm_runtime_layer::Func>,
+    /// The resource tables to use.
     pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    /// The types to use.
     pub types: Arc<[crate::types::ValueType]>,
+    /// The instance ID to use.
     pub instance_id: u64
 }
 
+/// A component model function that may be invoked to interact with an `Instance`.
 #[derive(Clone, Debug)]
 pub struct Func {
+    /// The store ID associated with this function.
     pub(crate) store_id: u64,
+    /// The type of this function.
     pub(crate) ty: FuncType,
+    /// The backing implementation for this function.
     pub(crate) backing: FuncImpl,
 }
 
 impl Func {
+    /// Creates a new function with the provided type and arguments.
     pub fn new<C: AsContextMut>(
         mut ctx: C,
         ty: FuncType,
@@ -61,6 +80,11 @@ impl Func {
         }
     }
 
+    /// Calls this function, returning an error if:
+    /// 
+    /// - The store did not match the original.
+    /// - The arguments or results did not match the signature.
+    /// - A trap occurred.
     pub fn call<C: AsContextMut>(
         &self,
         mut ctx: C,
@@ -128,10 +152,12 @@ impl Func {
         }
     }
 
+    /// Gets the type of this value.
     pub fn ty(&self) -> FuncType {
         self.ty.clone()
     }
 
+    /// Converts this function to a [`TypedFunc`], failing if the signatures do not match.
     pub fn typed<P: ComponentList, R: ComponentList>(&self) -> Result<TypedFunc<P, R>> {
         let mut params_results = vec![ValueType::Bool; P::LEN + R::LEN];
         P::into_tys(&mut params_results[..P::LEN]);
@@ -150,6 +176,7 @@ impl Func {
         })
     }
 
+    /// Calls this function from a guest context.
     pub(crate) fn call_from_guest<C: AsContextMut>(
         &self,
         ctx: C,
@@ -204,39 +231,70 @@ impl Func {
     }
 }
 
+/// Describes options to invoke an imported function from a guest.
 pub(crate) struct GuestInvokeOptions {
+    /// The component to use.
     pub component: Arc<ComponentInner>,
+    /// The string encoding to use.
     pub encoding: StringEncoding,
+    /// The function definition to use.
     pub function: Function,
+    /// The memory to use.
     pub memory: Option<Memory>,
+    /// The reallocation function to use.
     pub realloc: Option<wasm_runtime_layer::Func>,
+    /// The post-return function to use.
     pub post_return: Option<wasm_runtime_layer::Func>,
+    /// The resource tables to use.
     pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    /// The types to use.
     pub types: Arc<[crate::types::ValueType]>,
+    /// The instance ID to use.
     pub instance_id: u64,
+    /// The store ID to use.
     pub store_id: u64
 }
+
+/// Manages the invocation of a component model function with the canonical ABI.
 struct FuncBindgen<'a, C: AsContextMut> {
+    /// The interface function to call.
     pub callee_interface: Option<&'a Func>,
+    /// The core WASM function to call.
     pub callee_wasm: Option<&'a wasm_runtime_layer::Func>,
+    /// The component to use.
     pub component: &'a ComponentInner,
+    /// The context.
     pub ctx: C,
+    /// The encoding to use.
     pub encoding: &'a StringEncoding,
+    /// The list of flat results.
     pub flat_results: Vec<wasm_runtime_layer::Value>,
+    /// The memory to use.
     pub memory: &'a Option<Memory>,
+    /// The reallocation function to use.
     pub realloc: &'a Option<wasm_runtime_layer::Func>,
+    /// The post-return function to use.
     pub post_return: &'a Option<wasm_runtime_layer::Func>,
+    /// The arguments to use.
     pub arguments: &'a [Value],
+    /// The results to use.
     pub results: &'a mut [Value],
+    /// The resource tables to use.
     pub resource_tables: &'a Mutex<Vec<HandleTable>>,
+    /// The types to use.
     pub types: &'a [crate::types::ValueType],
+    /// The handles to drop at the call's end.
     pub handles_to_drop: Vec<(u32, i32)>,
+    /// The handles to require dropped at the call's end.
     pub required_dropped: Vec<(bool, u32, i32, Arc<AtomicBool>)>,
+    /// The instance ID to use.
     pub instance_id: u64,
+    /// The store ID to use.
     pub store_id: u64
 }
 
 impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
+    /// Loads a type from the given offset in guest memory.
     fn load<B: Blittable>(&self, offset: usize) -> Result<B> {
         Ok(B::from_bytes(<B::Array as ByteArray>::load(
             &self.ctx,
@@ -245,6 +303,7 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
         )?))
     }
 
+    /// Stores a type to the given offset in guest memory.
     fn store<B: Blittable>(&mut self, offset: usize, value: B) -> Result<()> {
         value.to_bytes().store(
             &mut self.ctx,
@@ -253,6 +312,7 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
         )
     }
 
+    /// Loads a list of types from the given offset in guest memory.
     fn load_array<B: Blittable>(&self, offset: usize, len: usize) -> Result<Arc<[B]>> {
         let mut raw_memory = B::zeroed_array(len);
         self.memory.as_ref().expect("No memory").read(
@@ -263,6 +323,7 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
         Ok(B::from_le_array(raw_memory))
     }
 
+    /// Stores a list of types to the given offset in guest memory.
     fn store_array<B: Blittable>(&mut self, offset: usize, value: &[B]) -> Result<()> {
         self.memory.as_ref().expect("No memory.").write(
             self.ctx.as_context_mut().inner,
@@ -1048,6 +1109,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
 
                 for (own, res, idx, ptr) in &self.required_dropped {
+                    ensure!(
+                        Arc::strong_count(ptr) == 1,
+                        "Borrow was not dropped at the end of method."
+                    );
+                    
                     if *own {
                         let table = &mut tables[*res as usize];
                         let mut elem = *table.get(*idx)?;
@@ -1055,11 +1121,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         elem.lend_count -= 1;
                         table.set(*idx, elem);
                     }
-
-                    ensure!(
-                        Arc::strong_count(ptr) == 1,
-                        "Borrow was not dropped at the end of method."
-                    );
                 }
 
                 for (i, val) in operands.drain(..).enumerate() {
@@ -1099,6 +1160,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
     }
 
     fn is_list_canonical(&self, element: &Type) -> bool {
+        /// Whether this is a little-endian machine.
         const LITTLE_ENDIAN: bool = cfg!(target_endian = "little");
 
         match element {
@@ -1120,13 +1182,17 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
     }
 }
 
+/// A strongly-typed component model function that can be called to interact with [`Instance`]s.
 #[derive(Clone, Debug)]
 pub struct TypedFunc<P: ComponentList, R: ComponentList> {
+    /// The inner function to call.
     inner: Func,
+    /// A marker to prevent compiler errors.
     data: PhantomData<fn(P) -> R>,
 }
 
 impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
+    /// Creates a new function, wrapping the given closure.
     pub fn new<C: AsContextMut>(
         ctx: C,
         f: impl 'static + Send + Sync + Fn(StoreContextMut<C::UserState, C::Engine>, P) -> Result<R>,
@@ -1152,6 +1218,10 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
         }
     }
 
+    /// Calls this function, returning an error if:
+    /// 
+    /// - The store did not match the original.
+    /// - A trap occurred.
     pub fn call(&self, ctx: impl AsContextMut, params: P) -> Result<R> {
         let mut params_results = vec![Value::Bool(false); P::LEN + R::LEN];
         params.into_values(&mut params_results[0..P::LEN])?;
@@ -1160,26 +1230,36 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
         R::from_values(results)
     }
 
+    /// Gets the underlying, untyped function.
     pub fn func(&self) -> Func {
         self.inner.clone()
     }
 
+    /// Gets the component model type of this function.
     pub fn ty(&self) -> FuncType {
         self.inner.ty.clone()
     }
 }
 
+/// Marks a type that may be blitted directly to and from guest memory.
 trait Blittable: Sized {
+    /// The type of byte array that matches the layout of this type.
     type Array: ByteArray;
 
+    /// Creates this type from a byte array.
     fn from_bytes(array: Self::Array) -> Self;
+    /// Converts this type to a byte array.
     fn to_bytes(self) -> Self::Array;
 
+    /// Creates a new, zeroed byte array for an array of `Self` of the given size.
     fn zeroed_array(len: usize) -> Arc<[u8]>;
+    /// Converts an array of bytes to an array of `Self`.
     fn from_le_array(array: Arc<[u8]>) -> Arc<[Self]>;
+    /// Converts a slice of `Self` to a slice of bytes.
     fn to_le_slice(data: &[Self]) -> &[u8];
 }
 
+/// Implements the `Blittable` interface for primitive types.
 macro_rules! impl_blittable {
     ($($type_impl: ident)*) => {
         $(
@@ -1213,8 +1293,13 @@ macro_rules! impl_blittable {
 }
 
 impl_blittable!(u8 u16 u32 u64 i8 i16 i32 i64 f32 f64);
+
+/// Denotes a byte array of any size.
 trait ByteArray: Sized {
+    /// Loads this byte array from a WASM memory.
     fn load(ctx: impl AsContext, memory: &Memory, offset: usize) -> Result<Self>;
+
+    /// Stores the contents of this byte array into a WASM memory.
     fn store(self, ctx: impl AsContextMut, memory: &Memory, offset: usize) -> Result<()>;
 }
 
@@ -1231,18 +1316,23 @@ impl<const N: usize> ByteArray for [u8; N] {
     }
 }
 
+/// The type of a dynamic host function.
 type FunctionBacking<T, E> = dyn 'static
     + Send
     + Sync
     + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
 
+/// The type of the key used in the vector of host functions.
 type FunctionBackingKeyPair<T, E> = (Arc<AtomicUsize>, Arc<FunctionBacking<T, E>>,);
 
+/// A vector for functions that automatically drops items when the references are dropped.
 pub(crate) struct FuncVec<T, E: backend::WasmEngine> {
+    /// The functions stored in the vector.
     functions: Vec<FunctionBackingKeyPair<T, E>>
 }
 
 impl<T, E: backend::WasmEngine> FuncVec<T, E> {
+    /// Pushes a new function into the vector.
     pub fn push(
         &mut self,
         f: impl 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>,
@@ -1255,6 +1345,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
         idx
     }
 
+    /// Gets a function from the vector.
     pub fn get(
         &self,
         value: &AtomicUsize,
@@ -1262,6 +1353,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
         self.functions[value.load(Ordering::Acquire)].1.clone()
     }
 
+    /// Clears all dead functions from the vector, and doubles its capacity.
     fn clear_dead_functions(&mut self) {
         let new_len = 2 * self.functions.len();
         let old = replace(&mut self.functions, Vec::with_capacity(new_len));

@@ -11,36 +11,61 @@ use crate::require_matches;
 use crate::values::ComponentType;
 use crate::{AsContextMut, ComponentInner, StoreContextMut};
 
-/// Represents a component model interface type
+/// Represents a component model interface type.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum ValueType {
+    /// The boolean type.
     Bool,
+    /// The eight-bit signed integer type.
     S8,
+    /// The eight-bit unsigned integer type.
     U8,
+    ///The 16-bit signed integer type.
     S16,
+    /// The 16-bit unsigned integer type.
     U16,
+    /// The 32-bit signed integer type.
     S32,
+    /// The 32-bit unsigned integer type.
     U32,
+    /// The 64-bit signed integer type.
     S64,
+    /// The 64-bit unsigned integer type.
     U64,
+    /// The 32-bit floating point number type.
     F32,
+    /// The 64-bit floating point number type.
     F64,
+    /// The UTF-8 character type.
     Char,
+    /// The string type.
     String,
+    /// The homogenous list of elements type.
     List(ListType),
+    /// The record with heterogenous fields type.
     Record(RecordType),
+    /// The tuple with heterogenous fields type.
     Tuple(TupleType),
+    /// The variant which may be one of multiple types or cases type.
     Variant(VariantType),
+    /// The enum which may be one of multiple cases type.
     Enum(EnumType),
+    /// The union which may be one of multiple types type.
     Union(UnionType),
+    /// The type which may or may not have an underlying value type.
     Option(OptionType),
+    /// The type that indicates success or failure type.
     Result(ResultType),
+    /// The set of boolean values type.
     Flags(FlagsType),
+    /// The owned resource handle type.
     Own(ResourceType),
+    /// The borrowed resource handle type.
     Borrow(ResourceType),
 }
 
 impl ValueType {
+    /// Creates a value type from a component.
     pub(crate) fn from_component(
         ty: &wit_parser::Type,
         component: &ComponentInner,
@@ -64,6 +89,7 @@ impl ValueType {
         })
     }
 
+    /// Creates a value type from a component type definition.
     pub(crate) fn from_component_typedef(
         def: Id<wit_parser::TypeDef>,
         component: &ComponentInner,
@@ -91,7 +117,7 @@ impl ValueType {
             wit_parser::TypeDefKind::Variant(x) => {
                 Self::Variant(VariantType::from_component(x, component, resource_map)?)
             }
-            wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_component(x, component)),
+            wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_component(x, component)?),
             wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(
                 Self::from_component(x, component, resource_map)?,
             )),
@@ -121,29 +147,36 @@ impl ValueType {
     }
 }
 
+/// Describes the type of a list of values, all of the same type.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ListType {
+    /// The element of the list.
     element: Arc<ValueType>,
 }
 
 impl ListType {
+    /// Creates a new list type for the given element type.
     pub fn new(element_ty: ValueType) -> Self {
         Self {
             element: Arc::new(element_ty),
         }
     }
 
+    /// Gets the element type for this list.
     pub fn element_ty(&self) -> ValueType {
         (*self.element).clone()
     }
 }
 
+/// Describes the type of an unordered collection of named fields, each associated with the values.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct RecordType {
+    /// The fields of the record.
     pub(crate) fields: Arc<[(usize, Arc<str>, ValueType)]>,
 }
 
 impl RecordType {
+    /// Creates a new record type from the given set of fields. The field names must be unique.
     pub fn new<S: Into<Arc<str>>>(
         fields: impl IntoIterator<Item = (S, ValueType)>,
     ) -> Result<Self> {
@@ -163,12 +196,22 @@ impl RecordType {
         Ok(Self { fields: to_sort })
     }
 
+    /// Gets the type of the provided field, if any.
+    pub fn field_ty(&self, name: impl AsRef<str>) -> Option<ValueType> {
+        self.fields
+            .iter()
+            .filter_map(|(_, x, val)| (&**x == name.as_ref()).then(|| val.clone()))
+            .next()
+    }
+
+    /// Gets an iterator over all field names and values in this record.
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&str, ValueType)> {
         self.fields
             .iter()
             .map(|(_, name, val)| (&**name, val.clone()))
     }
 
+    /// Creates a new record type, assuming that the fields are already sorted.
     pub(crate) fn new_sorted(
         fields: impl IntoIterator<Item = (Arc<str>, ValueType)>,
     ) -> Result<Self> {
@@ -187,6 +230,7 @@ impl RecordType {
         Ok(result)
     }
 
+    /// Creates the record type from the given component.
     fn from_component(
         ty: &wit_parser::Record,
         component: &ComponentInner,
@@ -216,22 +260,27 @@ impl RecordType {
     }
 }
 
+/// Describes the type of an ordered, unnamed sequence of heterogenously-typed values.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct TupleType {
+    /// The types of the tuple fields.
     fields: Arc<[ValueType]>,
 }
 
 impl TupleType {
+    /// Creates a tuple for the specified list of fields.
     pub fn new(fields: impl IntoIterator<Item = ValueType>) -> Self {
         Self {
             fields: fields.into_iter().collect(),
         }
     }
 
+    /// The set of field types for this tuple.
     pub fn fields(&self) -> &[ValueType] {
         &self.fields
     }
 
+    /// Creates this type from the given component.
     fn from_component(
         ty: &wit_parser::Tuple,
         component: &ComponentInner,
@@ -246,28 +295,45 @@ impl TupleType {
     }
 }
 
+/// Describes a single branch of a variant.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct VariantCase {
+    /// The name of this case.
     name: Arc<str>,
+    /// The type of this case's values, if any.
     ty: Option<ValueType>,
 }
 
 impl VariantCase {
+    /// Creates a new variant case with the specified name and optional associated type.
+    pub fn new(name: impl Into<Arc<str>>, ty: Option<ValueType>) -> Self {
+        Self {
+            name: name.into(),
+            ty
+        }
+    }
+
+    /// The name of this case.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// The type of values associated with this case, if any.
     pub fn ty(&self) -> Option<ValueType> {
         self.ty.clone()
     }
 }
 
+/// Describes a type has multiple possible states. Each state may optionally
+/// have a type associated with it.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct VariantType {
+    /// The cases of this variant.
     cases: Arc<[VariantCase]>,
 }
 
 impl VariantType {
+    /// Creates a new type for the given set of variant cases. Each case must have a unique name.
     pub fn new(cases: impl IntoIterator<Item = VariantCase>) -> Result<Self> {
         let cases: Arc<_> = cases.into_iter().collect();
 
@@ -280,10 +346,12 @@ impl VariantType {
         Ok(Self { cases })
     }
 
+    /// Gets all of the cases for this variant.
     pub fn cases(&self) -> &[VariantCase] {
         &self.cases
     }
 
+    /// Creates this type from the given component.
     fn from_component(
         ty: &wit_parser::Variant,
         component: &ComponentInner,
@@ -313,46 +381,66 @@ impl VariantType {
     }
 }
 
+/// A type that has multiple possible states.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct EnumType {
+    /// The cases of the enum.
     cases: Arc<[Arc<str>]>,
 }
 
 impl EnumType {
-    pub fn new<S: Into<Arc<str>>>(cases: impl IntoIterator<Item = S>) -> Self {
-        Self {
+    /// Creates a new enumeration from the list of case names. The case names must be unique.
+    pub fn new<S: Into<Arc<str>>>(cases: impl IntoIterator<Item = S>) -> Result<Self> {
+        let res = Self {
             cases: cases
                 .into_iter()
                 .map(|x| Into::<Arc<str>>::into(x))
                 .collect(),
+        };
+        
+        for i in 0..res.cases.len() {
+            for j in 0..i {
+                ensure!(res.cases[i] != res.cases[j], "Duplicate case names.");
+            }
         }
+
+        Ok(res)
     }
 
+    /// Gets a list of all cases in this enum.
     pub fn cases(&self) -> impl ExactSizeIterator<Item = &str> {
         self.cases.iter().map(|x| &**x)
     }
 
-    fn from_component(ty: &wit_parser::Enum, _component: &ComponentInner) -> Self {
+    /// Creates this type from the given component.
+    fn from_component(ty: &wit_parser::Enum, _component: &ComponentInner) -> Result<Self> {
         Self::new(ty.cases.iter().map(|x| x.name.as_str()))
     }
 }
 
+/// A type that has multiple possible states, each with an associated type.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct UnionType {
+    /// The cases for this union.
     cases: Arc<[ValueType]>,
 }
 
 impl UnionType {
-    pub fn new(cases: impl IntoIterator<Item = ValueType>) -> Self {
-        Self {
+    /// Creates a new union type from the given list of value types.
+    pub fn new(cases: impl IntoIterator<Item = ValueType>) -> Result<Self> {
+        let res = Self {
             cases: cases.into_iter().collect(),
-        }
+        };
+
+        Ok(res)
     }
 
+    /// The cases of this union.
     pub fn cases(&self) -> &[ValueType] {
         &self.cases
     }
 
+    /// Creates a new type from the given component.
     fn from_component(
         ty: &wit_parser::Union,
         component: &ComponentInner,
@@ -368,49 +456,62 @@ impl UnionType {
     }
 }
 
+/// A type that may also be the absence of anything.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct OptionType {
+    /// The type of this option when something exists.
     ty: Arc<ValueType>,
 }
 
 impl OptionType {
+    /// Creates a new option type that holds the given value.
     pub fn new(ty: ValueType) -> Self {
         Self { ty: Arc::new(ty) }
     }
 
+    /// Gets the type associated with the `Some` variant of this type.
     pub fn some_ty(&self) -> ValueType {
         (*self.ty).clone()
     }
 }
 
+/// A type that denotes successful or unsuccessful operation.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ResultType {
+    /// The types associated with the result variant.
     ok_err: Arc<(Option<ValueType>, Option<ValueType>)>,
 }
 
 impl ResultType {
+    /// Creates a new result type for the given `Ok` and `Err` variant types.
     pub fn new(ok: Option<ValueType>, err: Option<ValueType>) -> Self {
         Self {
             ok_err: Arc::new((ok, err)),
         }
     }
 
+    /// Gets the type of value returned for the `Ok` variant, if any.
     pub fn ok_ty(&self) -> Option<ValueType> {
         self.ok_err.0.clone()
     }
 
+    /// Gets the type of value returned for the `Err` variant, if any.
     pub fn err_ty(&self) -> Option<ValueType> {
         self.ok_err.1.clone()
     }
 }
 
+/// A type that denotes a set of named bitflags.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlagsType {
+    /// The names of each flags.
     names: Arc<[Arc<str>]>,
+    /// A mapping from flag name to index.
     pub(crate) indices: Arc<FxHashMap<Arc<str>, usize>>,
 }
 
 impl FlagsType {
+    /// Creates a new flags type with the specified list of names. The names must be unique.
     pub fn new<S: Into<Arc<str>>>(names: impl IntoIterator<Item = S>) -> Result<Self> {
         let names: Arc<_> = names
             .into_iter()
@@ -434,10 +535,12 @@ impl FlagsType {
         Ok(Self { names, indices })
     }
 
+    /// Gets an iterator over the names of the flags in this collection.
     pub fn names(&self) -> impl ExactSizeIterator<Item = &str> {
         self.names.iter().map(|x| &**x)
     }
 
+    /// Creates this type from the given component.
     fn from_component(ty: &wit_parser::Flags, _component: &ComponentInner) -> Result<Self> {
         Self::new(ty.flags.iter().map(|x| x.name.as_ref()))
     }
@@ -449,14 +552,25 @@ impl Hash for FlagsType {
     }
 }
 
+/// A counter that uniquely identifies resources.
 static RESOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Describes the type of a resource. This may either be:
+/// 
+/// - An abstract guest resource, associated with a component. Abstract resources
+/// cannot be used to instantiate any values.
+/// - An instantiated guest resource, associated with an instance. Instantiated guest
+/// resources identify resources created by WASM.
+/// - A host resource, which is associated with a native value.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ResourceType {
+    /// The kind of resource that this is.
     kind: ResourceKindValue,
 }
 
 impl ResourceType {
+    /// Creates a new host resource for storing values of the given type. Note that multiple
+    /// resource types may be created for the same `T`, and they will be distinct.
     pub fn new<T: 'static + Send + Sync + Sized>() -> Self {
         Self {
             kind: ResourceKindValue::Host {
@@ -466,7 +580,10 @@ impl ResourceType {
             },
         }
     }
-
+    
+    /// Creates a new host resource for storing values of the given type. Additionally,
+    /// adds a destructor that is called when the resource is dropped. Note that multiple
+    /// resource types may be created for the same `T`, and they will be distinct.
     pub fn with_destructor<T: 'static + Send + Sync + Sized, C: AsContextMut>(mut ctx: C, destructor: impl 'static + Send + Sync + Fn(StoreContextMut<'_, C::UserState, C::Engine>, T) -> Result<()>) -> Result<Self> {
         let store_id = ctx.as_context().inner.data().id;
         let destructor = wasm_runtime_layer::Func::new(
@@ -487,6 +604,7 @@ impl ResourceType {
         })
     }
 
+    /// Determines whether this resource type can be used to extract host values of `T` from the provided store.
     pub(crate) fn valid_for<T: 'static + Send + Sync>(&self, store_id: u64) -> bool {
         if let ResourceKindValue::Host { type_id, associated_store, .. } = &self.kind {
             *type_id == TypeId::of::<T>() && associated_store.as_ref().map(|(id, _)| *id == store_id).unwrap_or(true)
@@ -496,6 +614,7 @@ impl ResourceType {
         }
     }
 
+    /// Determines whether this resource type is owned by the specified instance.
     pub(crate) fn is_owned_by_instance(&self, instance: u64) -> bool {
         if let ResourceKindValue::Instantiated { instance: a, .. } = &self.kind {
             instance == *a
@@ -504,6 +623,7 @@ impl ResourceType {
         }
     }
 
+    /// Creates this type from the given component.
     pub(crate) fn from_resolve(
         id: Id<wit_parser::TypeDef>,
         component: &ComponentInner,
@@ -522,6 +642,7 @@ impl ResourceType {
         }
     }
 
+    /// Determines whether this is a host resource, and if so, returns the optional destructor.
     pub(crate) fn host_destructor(&self) -> Option<Option<wasm_runtime_layer::Func>> {
         if let ResourceKindValue::Host { associated_store, .. } = &self.kind {
             Some(associated_store.as_ref().map(|(_, x)| x.clone()))
@@ -530,6 +651,7 @@ impl ResourceType {
         }
     }
 
+    /// Converts this type from an abstract guest resource to an instantiated guest resource.
     pub(crate) fn instantiate(&self, instance: u64) -> Result<Self> {
         if let ResourceKindValue::Abstract { id, component: _ } = &self.kind {
             Ok(Self {
@@ -543,24 +665,36 @@ impl ResourceType {
         }
     }
 
+    /// Determines whether this is an instantiated or host resource.
     pub(crate) fn is_instantiated(&self) -> bool {
         !matches!(&self.kind, ResourceKindValue::Abstract { .. })
     }
 }
 
+/// Marks the backing for a resource type.
 #[derive(Clone, Debug)]
 enum ResourceKindValue {
+    /// This is an abstract, uninstantiated resource.
     Abstract {
+        /// The ID of the resource.
         id: usize,
+        /// The ID of the component.
         component: u64,
     },
+    /// A resource associated with an instance.
     Instantiated {
+        /// The ID of the resource.
         id: usize,
+        /// The ID of the instance.
         instance: u64,
     },
+    /// A resource associated with the host.
     Host {
+        /// The ID of the resource.
         resource_id: u64,
+        /// The type ID of the representation.
         type_id: TypeId,
+        /// The associated store and destructor, if any.
         associated_store: Option<(u64, wasm_runtime_layer::Func)>,
     },
 }
@@ -651,6 +785,7 @@ impl std::fmt::Debug for FuncType {
 }
 
 impl FuncType {
+    /// Creates this type from the given component.
     pub(crate) fn from_component(
         func: &wit_parser::Function,
         component: &ComponentInner,
@@ -735,11 +870,20 @@ impl FuncType {
     }
 }
 
+/// Marks a list of components that can be passed as parameters and results.
 pub trait ComponentList: Sized {
+    /// The length of the component list.
     const LEN: usize;
 
+    /// Stores the types of this list into the given slice. Panics
+    /// if the slice is not big enough.
     fn into_tys(types: &mut [ValueType]);
+
+    /// Attempts to convert this component list into values, storing them
+    /// in the provided slice.
     fn into_values(self, values: &mut [crate::values::Value]) -> Result<()>;
+    
+    /// Attempts to convert a list of values into a component list of this type.
     fn from_values(values: &[crate::values::Value]) -> Result<Self>;
 }
 
@@ -757,9 +901,12 @@ impl ComponentList for () {
     }
 }
 
+/// A function that returns a single result, and eats a macro parameter in the process.
+/// Used to count the number of parameters in the macro.
 #[allow(clippy::extra_unused_type_parameters)]
 const fn one<T>() -> usize { 1 }
 
+/// Implements the component list for a tuple with the provided set of parameters.
 macro_rules! impl_component_list {
     ( $( ($name:ident, $extra:ident) )+ ) => {
         impl<$($name: ComponentType),+> ComponentList for ($($name,)+)
