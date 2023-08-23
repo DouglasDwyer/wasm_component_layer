@@ -10,7 +10,7 @@ use private::*;
 
 use crate::require_matches::require_matches;
 use crate::types::*;
-use crate::{AsContext, AsContextMut};
+use crate::{AsContext};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {

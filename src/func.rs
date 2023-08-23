@@ -71,7 +71,7 @@ impl Func {
             panic!("Attempted to call function with incorrect store.");
         }
 
-        self.ty.match_params(arguments);
+        self.ty.match_params(arguments)?;
 
         if self.ty.results().len() != results.len() {
             bail!("Incorrect result length.");
@@ -122,8 +122,7 @@ impl Func {
             FuncImpl::HostFunc(idx) => {
                 let callee = ctx.as_context().inner.data().host_functions.get(&idx);
                 (callee)(ctx.as_context_mut(), arguments, results)?;
-                self.ty.match_results(results);
-                Ok(())
+                self.ty.match_results(results)
             }
         }
     }
@@ -657,7 +656,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 require_matches!(
                     operands.pop(),
                     Some(Value::S32(ptr)),
-                    memory.read(&self.ctx.as_context().inner, ptr as usize, &mut result)
+                    memory.read(&self.ctx.as_context().inner, ptr as usize, &mut result)?
                 );
 
                 match self.encoding {
@@ -1042,7 +1041,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     .try_lock()
                     .expect("Could not lock resource table.");
                 for (res, idx) in &self.handles_to_drop {
-                    tables[*res as usize].remove(*idx);
+                    tables[*res as usize].remove(*idx).expect("Could not find handle to drop.");
                 }
 
                 for (own, res, idx, ptr) in &self.required_dropped {
@@ -1087,10 +1086,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     results.push(Value::S32(*x))
                 );
             }
-            Instruction::GuestDeallocate { size: _, align: _ } => unreachable!(),
-            Instruction::GuestDeallocateString => unreachable!(),
-            Instruction::GuestDeallocateList { element: _ } => unreachable!(),
-            Instruction::GuestDeallocateVariant { blocks: _ } => unreachable!(),
         }
 
         Ok(())

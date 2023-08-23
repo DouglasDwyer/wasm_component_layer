@@ -465,40 +465,6 @@ def_instruction! {
             size: usize,
             align: usize,
         } : [0] => [1],
-
-        /// Used exclusively for guest-code generation this indicates that
-        /// the standard memory deallocation function needs to be invoked with
-        /// the specified parameters.
-        ///
-        /// This will pop a pointer from the stack and push nothing.
-        GuestDeallocate {
-            size: usize,
-            align: usize,
-        } : [1] => [0],
-
-        /// Used exclusively for guest-code generation this indicates that
-        /// a string is being deallocated. The ptr/length are on the stack and
-        /// are poppped off and used to deallocate the string.
-        GuestDeallocateString : [2] => [0],
-
-        /// Used exclusively for guest-code generation this indicates that
-        /// a list is being deallocated. The ptr/length are on the stack and
-        /// are poppped off and used to deallocate the list.
-        ///
-        /// This variant also pops a block off the block stack to be used as the
-        /// body of the deallocation loop.
-        GuestDeallocateList {
-            element: &'a Type,
-        } : [2] => [0],
-
-        /// Used exclusively for guest-code generation this indicates that
-        /// a variant is being deallocated. The integer discriminant is popped
-        /// off the stack as well as `blocks` number of blocks popped from the
-        /// blocks stack. The variant is used to select, at runtime, which of
-        /// the blocks is executed to deallocate the variant.
-        GuestDeallocateVariant {
-            blocks: usize,
-        } : [1] => [0],
     }
 }
 
@@ -586,7 +552,6 @@ pub struct Generator<'a, B: Bindgen> {
     operands: Vec<B::Operand>,
     results: Vec<B::Operand>,
     stack: Vec<B::Operand>,
-    return_pointer: Option<B::Operand>,
 }
 
 impl<'a, B: Bindgen> Generator<'a, B> {
@@ -604,7 +569,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             operands: Vec::new(),
             results: Vec::new(),
             stack: Vec::new(),
-            return_pointer: None,
         }
     }
 
@@ -671,23 +635,9 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.lift(ty)?
                     }
                 } else {
-                    let ptr = match self.variant {
-                        // imports into guests means it's a wasm module
-                        // calling an imported function. We supplied the
-                        // return poitner as the last argument (saved in
-                        // `self.return_pointer`) so we use that to read
-                        // the result of the function from memory.
-                        AbiVariant::GuestImport => {
-                            unimplemented!()
-                        }
+                    let ptr = self.stack.pop().unwrap();
 
-                        // guest exports means that this is a host
-                        // calling wasm so wasm returned a pointer to where
-                        // the result is stored
-                        AbiVariant::GuestExport => self.stack.pop().unwrap(),
-                    };
-
-                    self.read_results_from_memory(&func.results, ptr, 0);
+                    self.read_results_from_memory(&func.results, ptr, 0)?;
                 }
 
                 self.emit(&Instruction::Return {
@@ -709,7 +659,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                             self.emit(&Instruction::GetArg { nth: offset })?;
                             offset += 1;
                         }
-                        self.lift(ty);
+                        self.lift(ty)?;
                     }
                 } else {
                     // ... otherwise argument is read in succession from memory
@@ -720,26 +670,13 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     let ptr = self.stack.pop().unwrap();
                     for (_, ty) in func.params.iter() {
                         offset = align_to(offset, self.bindgen.sizes().align(ty));
-                        self.read_from_memory(ty, ptr.clone(), offset as i32);
+                        self.read_from_memory(ty, ptr.clone(), offset as i32)?;
                         offset += self.bindgen.sizes().size(ty);
                     }
                 }
 
                 // ... and that allows us to call the interface types function
                 self.emit(&Instruction::CallInterface { func })?;
-
-                // This was dynamically allocated by the caller so after
-                // it's been read by the guest we need to deallocate it.
-                if let AbiVariant::GuestExport = self.variant {
-                    if sig.indirect_params {
-                        let (size, align) = self
-                            .bindgen
-                            .sizes()
-                            .record(func.params.iter().map(|t| &t.1));
-                        self.emit(&Instruction::GetArg { nth: 0 })?;
-                        self.emit(&Instruction::GuestDeallocate { size, align })?;
-                    }
-                }
 
                 if !sig.retptr {
                     // With no return pointer in use we simply lower the
@@ -750,7 +687,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         .collect::<Vec<_>>();
                     for (ty, result) in func.results.iter_types().zip(results) {
                         self.stack.push(result);
-                        self.lower(ty);
+                        self.lower(ty)?;
                     }
                 } else {
                     match self.variant {
@@ -765,7 +702,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                                 nth: sig.params.len() - 1,
                             })?;
                             let ptr = self.stack.pop().unwrap();
-                            self.write_params_to_memory(func.results.iter_types(), ptr, 0);
+                            self.write_params_to_memory(func.results.iter_types(), ptr, 0)?;
                         }
 
                         // For a guest import this is a function defined in
@@ -823,14 +760,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.stack.append(&mut self.results);
 
         Ok(())
-    }
-
-    fn push_block(&mut self) {
-        unimplemented!("Bruh {:?}", self.stack);
-    }
-
-    fn finish_block(&mut self, _size: usize) {
-        unimplemented!()
     }
 
     fn lower(&mut self, ty: &Type) -> Result<()> {
@@ -905,7 +834,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         .collect::<Vec<_>>();
                     for (field, value) in record.fields.iter().zip(values) {
                         self.stack.push(value);
-                        self.lower(&field.ty);
+                        self.lower(&field.ty)?;
                     }
                     Ok(())
                 }
@@ -917,7 +846,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         .collect::<Vec<_>>();
                     for (ty, value) in tuple.types.iter().zip(values) {
                         self.stack.push(value);
-                        self.lower(ty);
+                        self.lower(ty)?;
                     }
                     Ok(())
                 }
@@ -984,7 +913,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             // Using the payload of this block we lower the type to
             // raw wasm values.
             self.stack.push(payload_name);
-            self.lower(ty);
+            self.lower(ty)?;
 
             // Determine the types of all the wasm values we just
             // pushed, and record how many. If we pushed too few
@@ -1099,7 +1028,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         temp.truncate(0);
                         push_wasm(self.resolve, self.variant, &field.ty, &mut temp);
                         self.stack.extend(args.drain(..temp.len()));
-                        self.lift(&field.ty);
+                        self.lift(&field.ty)?;
                     }
                     self.emit(&RecordLift {
                         record,
@@ -1118,7 +1047,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         temp.truncate(0);
                         push_wasm(self.resolve, self.variant, ty, &mut temp);
                         self.stack.extend(args.drain(..temp.len()));
-                        self.lift(ty);
+                        self.lift(ty)?;
                     }
                     self.emit(&TupleLift { tuple, ty: id })
                 }
@@ -1413,7 +1342,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         // After lowering the list there's two i32 values on the stack
         // which we write into memory, writing the pointer into the low address
         // and the length into the high address.
-        self.lower(ty);
+        self.lower(ty)?;
         self.stack.push(addr.clone());
         self.emit(&Instruction::I32Store { offset: offset + 4 })?;
         self.stack.push(addr);
@@ -1599,27 +1528,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         offset: i32,
     ) -> Result<()> {
         self.read_fields_from_memory(results.iter_types(), addr, offset)
-    }
-
-    fn read_variant_arms_from_memory<'b>(
-        &mut self,
-        offset: i32,
-        addr: B::Operand,
-        tag: Int,
-        cases: impl IntoIterator<Item = Option<&'b Type>> + Clone,
-    ) -> Result<()> {
-        self.stack.push(addr.clone());
-        self.load_intrepr(offset, tag)?;
-        let payload_offset =
-            offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
-        for ty in cases {
-            self.push_block();
-            if let Some(ty) = ty {
-                self.read_from_memory(ty, addr.clone(), payload_offset)?;
-            }
-            self.finish_block(ty.is_some() as usize);
-        }
-        Ok(())
     }
 
     fn read_variant_arm_from_memory<'b>(

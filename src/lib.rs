@@ -106,7 +106,6 @@ impl Component {
                 instance_modules: wasmtime_environ::PrimaryMap::default(),
                 interface_identifiers,
                 modules,
-                package_identifiers,
                 resource_map: vec![
                     TypeResourceTableIndex::from_u32(u32::MAX - 1);
                     resolve.types.len()
@@ -704,7 +703,6 @@ struct ComponentInner {
     pub instance_modules: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, StaticModuleIndex>,
     pub interface_identifiers: Vec<InterfaceIdentifier>,
     pub modules: FxHashMap<StaticModuleIndex, ModuleTranslation>,
-    pub package_identifiers: Vec<PackageIdentifier>,
     pub resolve: Resolve,
     pub size_align: SizeAlign,
     pub translation: ComponentTranslation,
@@ -1870,6 +1868,8 @@ impl HandleTable {
 
 #[cfg(test)]
 mod tests {
+    #![allow(warnings)]
+
     use super::*;
 
     #[test]

@@ -7,7 +7,7 @@ use fxhash::*;
 use id_arena::*;
 
 use crate::values::ComponentType;
-use crate::{AsContext, AsContextMut, ComponentInner};
+use crate::{AsContextMut, ComponentInner};
 
 /// Represents a component model interface type
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -718,11 +718,6 @@ impl FuncType {
         &self.params_results[self.len_params..]
     }
 
-    /// Returns the pair of parameter and result types of the function type.
-    pub(crate) fn params_results(&self) -> (&[ValueType], &[ValueType]) {
-        self.params_results.split_at(self.len_params)
-    }
-
     /// Returns `Ok` if the number and types of items in `params` matches as expected by the [`FuncType`].
     pub(crate) fn match_params(&self, params: &[crate::values::Value]) -> Result<()> {
         if self.params().len() != params.len() {
@@ -789,11 +784,13 @@ macro_rules! impl_component_list {
         {
             const LEN: usize = count!($($name.do_something(),)+);
 
+            #[allow(warnings)]
             fn into_tys(types: &mut [ValueType]) {
                 let mut counter = 0;
                 $(types[{ let res = counter; counter += 1; res }] = $name::ty();)+
             }
 
+            #[allow(warnings)]
             fn into_values(self, values: &mut [crate::values::Value]) -> Result<()> {
                 let ($($extra,)+) = self;
                 let mut counter = 0;
@@ -801,6 +798,7 @@ macro_rules! impl_component_list {
                 Ok(())
             }
 
+            #[allow(warnings)]
             fn from_values(values: &[crate::values::Value]) -> Result<Self> {
                 let mut counter = 0;
                 Ok(($($name::try_from(&values[{ let res = counter; counter += 1; res }])?, )+))
