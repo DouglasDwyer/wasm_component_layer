@@ -9,6 +9,7 @@ use anyhow::*;
 use once_cell::sync::*;
 use private::*;
 
+use crate::AsContextMut;
 use crate::require_matches::require_matches;
 use crate::types::*;
 use crate::AsContext;
@@ -668,15 +669,22 @@ pub struct ResourceOwn {
     tracker: Arc<AtomicUsize>,
     rep: i32,
     destructor: Option<wasm_runtime_layer::Func>,
+    store_id: u64,
     ty: ResourceType,
 }
 
 impl ResourceOwn {
-    pub fn new(rep: i32, ty: ResourceType) -> Result<Self> {
+    pub fn new<T: 'static + Send + Sync + Sized>(mut ctx: impl AsContextMut, value: T, ty: ResourceType) -> Result<Self> {
+        let mut store_ctx = ctx.as_context_mut();
+        let store_id = store_ctx.inner.data().id;
+        ensure!(ty.valid_for::<T>(store_id), "Resource value was of incorrect type.");
+        let rep = store_ctx.inner.data_mut().host_resources.insert(Box::new(value)) as i32;
+
         Ok(Self {
             tracker: Arc::default(),
             rep,
             destructor: None,
+            store_id,
             ty,
         })
     }
@@ -684,6 +692,7 @@ impl ResourceOwn {
     pub(crate) fn new_guest(
         rep: i32,
         ty: ResourceType,
+        store_id: u64,
         destructor: Option<wasm_runtime_layer::Func>,
     ) -> Self {
         Self {
@@ -691,12 +700,13 @@ impl ResourceOwn {
             rep,
             destructor,
             ty,
+            store_id
         }
     }
 
     pub fn borrow(&self, ctx: impl crate::AsContextMut) -> Result<ResourceBorrow> {
         ensure!(
-            self.ty.store_id() == ctx.as_context().inner.data().id,
+            self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
         ensure!(
@@ -707,13 +717,14 @@ impl ResourceOwn {
             dead: Arc::default(),
             host_tracker: Some(self.tracker.clone()),
             rep: self.rep,
+            store_id: self.store_id,
             ty: self.ty.clone(),
         })
     }
 
     pub fn rep(&self, ctx: impl AsContext) -> Result<i32> {
         ensure!(
-            self.ty.store_id() == ctx.as_context().inner.data().id,
+            self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
         Ok(self.rep)
@@ -725,7 +736,7 @@ impl ResourceOwn {
 
     pub fn drop(&self, mut ctx: impl crate::AsContextMut) -> Result<()> {
         ensure!(
-            self.ty.store_id() == ctx.as_context().inner.data().id,
+            self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
         ensure!(
@@ -753,7 +764,7 @@ impl ResourceOwn {
 
     pub(crate) fn lower(&self, ctx: impl crate::AsContextMut) -> Result<i32> {
         ensure!(
-            self.ty.store_id() == ctx.as_context().inner.data().id,
+            self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
         ensure!(
@@ -776,22 +787,24 @@ pub struct ResourceBorrow {
     dead: Arc<AtomicBool>,
     host_tracker: Option<Arc<AtomicUsize>>,
     rep: i32,
+    store_id: u64,
     ty: ResourceType,
 }
 
 impl ResourceBorrow {
-    pub(crate) fn new(rep: i32, ty: ResourceType) -> Self {
+    pub(crate) fn new(rep: i32, store_id: u64, ty: ResourceType) -> Self {
         Self {
             dead: Arc::default(),
             host_tracker: None,
             rep,
             ty,
+            store_id
         }
     }
 
     pub fn rep(&self, ctx: impl AsContext) -> Result<i32> {
         ensure!(
-            self.ty.store_id() == ctx.as_context().inner.data().id,
+            self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
         Ok(self.rep)
@@ -803,7 +816,7 @@ impl ResourceBorrow {
 
     pub fn drop(&self, ctx: impl crate::AsContextMut) -> Result<()> {
         ensure!(
-            self.ty.store_id() == ctx.as_context().inner.data().id,
+            self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
         ensure!(
@@ -820,7 +833,7 @@ impl ResourceBorrow {
 
     pub(crate) fn lower(&self, ctx: impl crate::AsContextMut) -> Result<i32> {
         ensure!(
-            self.ty.store_id() == ctx.as_context().inner.data().id,
+            self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
         );
         ensure!(

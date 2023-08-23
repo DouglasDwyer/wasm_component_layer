@@ -1,3 +1,4 @@
+use std::any::*;
 use std::hash::*;
 use std::sync::atomic::*;
 use std::sync::*;
@@ -6,8 +7,9 @@ use anyhow::*;
 use fxhash::*;
 use id_arena::*;
 
+use crate::require_matches;
 use crate::values::ComponentType;
-use crate::{AsContextMut, ComponentInner};
+use crate::{AsContextMut, ComponentInner, StoreContextMut};
 
 /// Represents a component model interface type
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -447,54 +449,51 @@ impl Hash for FlagsType {
     }
 }
 
+static RESOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ResourceType {
     kind: ResourceKindValue,
 }
 
 impl ResourceType {
-    pub fn new(mut ctx: impl AsContextMut, destructor: Option<crate::func::Func>) -> Result<Self> {
-        static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+    pub fn new<T: 'static + Send + Sync + Sized>() -> Self {
+        Self {
+            kind: ResourceKindValue::Host {
+                resource_id: RESOURCE_ID_COUNTER.fetch_add(1, Ordering::AcqRel),
+                type_id: TypeId::of::<T>(),
+                associated_store: None
+            },
+        }
+    }
 
+    pub fn with_destructor<T: 'static + Send + Sync + Sized, C: AsContextMut>(mut ctx: C, destructor: impl 'static + Send + Sync + Fn(StoreContextMut<'_, C::UserState, C::Engine>, T) -> Result<()>) -> Result<Self> {
         let store_id = ctx.as_context().inner.data().id;
-        let destructor = if let Some(destructor) = destructor {
-            ensure!(
-                store_id == destructor.store_id,
-                "Destructor was not created with the correct store."
-            );
-            let ty = destructor.ty();
-            ensure!(
-                ty.results() == &[],
-                "Destructor did not have the correct signature."
-            );
-            ensure!(
-                ty.params() == &[ValueType::S32],
-                "Destructor did not have the correct signature."
-            );
-
-            Some(wasm_runtime_layer::Func::new(
-                ctx.as_context_mut().inner,
-                wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []),
-                move |ctx, val, _res| {
-                    let wasm_runtime_layer::Value::I32(rep) = &val[0] else { bail!("Incorrect rep type.") };
-                    destructor.call(
-                        crate::StoreContextMut { inner: ctx },
-                        &[crate::values::Value::S32(*rep)],
-                        &mut [],
-                    )
-                },
-            ))
-        } else {
-            None
-        };
+        let destructor = wasm_runtime_layer::Func::new(
+            ctx.as_context_mut().inner,
+            wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []),
+            move |mut ctx, val, _res| {
+                let resource = wasm_runtime_layer::AsContextMut::as_context_mut(&mut ctx).data_mut().host_resources.remove(require_matches!(val[0], wasm_runtime_layer::Value::I32(x), x) as usize);
+                destructor(StoreContextMut { inner: ctx }, *resource.downcast().expect("Resource was of incorrect type."))
+            },
+        );
 
         Ok(Self {
             kind: ResourceKindValue::Host {
-                store_id,
-                resource_id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
-                destructor,
+                resource_id: RESOURCE_ID_COUNTER.fetch_add(1, Ordering::AcqRel),
+                type_id: TypeId::of::<T>(),
+                associated_store: Some((store_id, destructor))
             },
         })
+    }
+
+    pub(crate) fn valid_for<T: 'static + Send + Sync>(&self, store_id: u64) -> bool {
+        if let ResourceKindValue::Host { type_id, associated_store, .. } = &self.kind {
+            *type_id == TypeId::of::<T>() && associated_store.as_ref().map(|(id, _)| *id == store_id).unwrap_or(true)
+        }
+        else {
+            false
+        }
     }
 
     pub(crate) fn is_owned_by_instance(&self, instance: u64) -> bool {
@@ -524,20 +523,19 @@ impl ResourceType {
     }
 
     pub(crate) fn host_destructor(&self) -> Option<Option<wasm_runtime_layer::Func>> {
-        if let ResourceKindValue::Host { destructor, .. } = &self.kind {
-            Some(destructor.clone())
+        if let ResourceKindValue::Host { associated_store, .. } = &self.kind {
+            Some(associated_store.as_ref().map(|(_, x)| x.clone()))
         } else {
             None
         }
     }
 
-    pub(crate) fn instantiate(&self, store_id: u64, instance: u64) -> Result<Self> {
+    pub(crate) fn instantiate(&self, instance: u64) -> Result<Self> {
         if let ResourceKindValue::Abstract { id, component: _ } = &self.kind {
             Ok(Self {
                 kind: ResourceKindValue::Instantiated {
                     id: *id,
-                    instance,
-                    store_id,
+                    instance
                 },
             })
         } else {
@@ -551,14 +549,6 @@ impl ResourceType {
             _ => true,
         }
     }
-
-    pub(crate) fn store_id(&self) -> u64 {
-        match &self.kind {
-            ResourceKindValue::Abstract { .. } => panic!("Tried to get ID for abstract type."),
-            ResourceKindValue::Instantiated { store_id, .. } => *store_id,
-            ResourceKindValue::Host { store_id, .. } => *store_id,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -570,12 +560,11 @@ enum ResourceKindValue {
     Instantiated {
         id: usize,
         instance: u64,
-        store_id: u64,
     },
     Host {
-        store_id: u64,
         resource_id: u64,
-        destructor: Option<wasm_runtime_layer::Func>,
+        type_id: TypeId,
+        associated_store: Option<(u64, wasm_runtime_layer::Func)>,
     },
 }
 
@@ -594,10 +583,10 @@ impl PartialEq for ResourceKindValue {
             ) => a == x && b == y,
             (
                 ResourceKindValue::Instantiated {
-                    id: a, instance: b, ..
+                    id: a, instance: b
                 },
                 ResourceKindValue::Instantiated {
-                    id: x, instance: y, ..
+                    id: x, instance: y
                 },
             ) => a == x && b == y,
             (
@@ -621,16 +610,14 @@ impl Hash for ResourceKindValue {
             }
             ResourceKindValue::Instantiated {
                 id,
-                instance,
-                store_id: _,
+                instance
             } => {
                 id.hash(state);
                 instance.hash(state);
             }
             ResourceKindValue::Host {
-                store_id: _,
                 resource_id,
-                destructor: _,
+                ..
             } => resource_id.hash(state),
         }
     }
@@ -736,8 +723,8 @@ impl FuncType {
 
     /// Returns `Ok` if the number and types of items in `results` matches as expected by the [`FuncType`].
     pub(crate) fn match_results(&self, results: &[crate::values::Value]) -> Result<()> {
-        if self.params().len() != results.len() {
-            bail!("Incorrect parameter length.");
+        if self.results().len() != results.len() {
+            bail!("Incorrect result length.");
         }
         if self
             .results()
@@ -745,7 +732,7 @@ impl FuncType {
             .cloned()
             .ne(results.iter().map(crate::values::Value::ty))
         {
-            bail!("Incorrect parameter types.");
+            bail!("Incorrect result types.");
         }
         Ok(())
     }
@@ -773,16 +760,13 @@ impl ComponentList for () {
     }
 }
 
-macro_rules! count {
-    () => (0usize);
-    ( $x:tt $($xs:tt)* ) => (1usize + count!($($xs)*));
-}
+const fn one<T>() -> usize { 1 }
 
 macro_rules! impl_component_list {
     ( $( ($name:ident, $extra:ident) )+ ) => {
         impl<$($name: ComponentType),+> ComponentList for ($($name,)+)
         {
-            const LEN: usize = count!($($name.do_something(),)+);
+            const LEN: usize = { $(one::<$name>() + )+ 0 };
 
             #[allow(warnings)]
             fn into_tys(types: &mut [ValueType]) {

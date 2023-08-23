@@ -11,6 +11,7 @@ id-arena = "2.2.1"
 once_cell = "1.18.0"
 ref-cast = "1.0.19"
 semver = "1.0.18"
+slab = "0.4.9"
 vec-option = "0.3.0"
 wasm_runtime_layer = { version = "0.1.1", features = [ "backend_wasmi" ] }
 wasmtime-environ = { version = "12.0.0", features = [ "component-model" ] }

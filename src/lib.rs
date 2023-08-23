@@ -23,7 +23,7 @@ mod types;
 /// Provides the ability to instantiate component model types.
 mod values;
 
-
+use std::any::*;
 use std::sync::atomic::*;
 use std::sync::*;
 
@@ -31,6 +31,7 @@ use anyhow::*;
 use fxhash::*;
 use id_arena::*;
 
+use slab::*;
 use vec_option::*;
 pub use wasm_runtime_layer::Engine;
 use wasm_runtime_layer::*;
@@ -57,21 +58,25 @@ impl Component {
     }
 
     /// The types and interfaces exported by this component.
-    pub fn exports(&self) -> &ExportTypes {
+    pub fn exports(&self) -> &ComponentTypes {
         &self.0.export_types
     }
 
     /// The types and interfaces imported by this component. To instantiate
     /// the component, all of these imports must be satisfied by the [`Linker`].
-    pub fn imports(&self) -> &ImportTypes {
+    pub fn imports(&self) -> &ComponentTypes {
         &self.0.import_types
+    }
+
+    pub fn package(&self) -> &PackageIdentifier {
+        &self.0.package
     }
 
     /// Parses the given bytes into a component, and creates an uninitialized component backing.
     fn generate_component<E: backend::WasmEngine>(
         engine: &Engine<E>,
         bytes: &[u8],
-    ) -> Result<(ComponentInner, ComponentTypes)> {
+    ) -> Result<(ComponentInner, wasmtime_environ::component::ComponentTypes)> {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let decoded = wit_component::decode(bytes)
@@ -103,13 +108,11 @@ impl Component {
         let mut size_align = SizeAlign::default();
         size_align.fill(&resolve);
 
-        let export_types = ExportTypes::new(
-            (&resolve.packages[resolve.worlds[world_id]
-                .package
-                .context("No package associated with world.")?]
-            .name)
-                .into(),
-        );
+        let package = (&resolve.packages[resolve.worlds[world_id]
+            .package
+            .context("No package associated with world.")?]
+        .name)
+            .into();
 
         let package_identifiers = Self::generate_package_identifiers(&resolve)?;
         let interface_identifiers =
@@ -119,8 +122,9 @@ impl Component {
             ComponentInner {
                 export_mapping,
                 export_names: FxHashMap::default(),
-                import_types: ImportTypes::new(),
-                export_types,
+                import_types: ComponentTypes::new(),
+                export_types: ComponentTypes::new(),
+                export_info: ExportTypes::default(),
                 extracted_memories: FxHashMap::default(),
                 extracted_reallocs: FxHashMap::default(),
                 extracted_post_returns: FxHashMap::default(),
@@ -137,6 +141,7 @@ impl Component {
                 size_align,
                 translation,
                 world_id,
+                package
             },
             component_types,
         ))
@@ -193,7 +198,7 @@ impl Component {
                                 .import_types
                                 .instances
                                 .entry(inner.interface_identifiers[x.index()].clone())
-                                .or_insert_with(ImportTypesInstance::new);
+                                .or_insert_with(ComponentTypesInstance::new);
                             ensure!(
                                 entry.resources.insert(name.as_str().into(), ty).is_none(),
                                 "Duplicate resource import."
@@ -233,7 +238,7 @@ impl Component {
                                 .export_types
                                 .instances
                                 .entry(inner.interface_identifiers[x.index()].clone())
-                                .or_insert_with(ExportTypesInstance::new);
+                                .or_insert_with(ComponentTypesInstance::new);
                             ensure!(
                                 entry.resources.insert(name.as_str().into(), ty).is_none(),
                                 "Duplicate resource export."
@@ -285,7 +290,7 @@ impl Component {
     /// Fills in all initialization data for the component.
     fn extract_initializers(
         mut inner: ComponentInner,
-        types: &ComponentTypes,
+        types: &wasmtime_environ::component::ComponentTypes,
     ) -> Result<ComponentInner> {
         let lowering_options = Self::get_lowering_options_and_extract_trampolines(
             &inner.translation.trampolines,
@@ -378,7 +383,7 @@ impl Component {
                             .import_types
                             .instances
                             .entry(inst.clone())
-                            .or_insert_with(ImportTypesInstance::new)
+                            .or_insert_with(ComponentTypesInstance::new)
                     } else {
                         &mut inner.import_types.root
                     };
@@ -476,7 +481,7 @@ impl Component {
     ) -> Result<(
         ComponentTranslation,
         wasmtime_environ::PrimaryMap<StaticModuleIndex, wasmtime_environ::ModuleTranslation<'a>>,
-        ComponentTypes,
+        wasmtime_environ::component::ComponentTypes,
     )> {
         let tunables = wasmtime_environ::Tunables::default();
         let mut types = ComponentTypesBuilder::default();
@@ -490,7 +495,7 @@ impl Component {
     }
 
     /// Fills in all of the exports for a component.
-    fn load_exports(mut inner: ComponentInner, types: &ComponentTypes) -> Result<ComponentInner> {
+    fn load_exports(mut inner: ComponentInner, types: &wasmtime_environ::component::ComponentTypes) -> Result<ComponentInner> {
         Self::export_names(&mut inner);
 
         for (export_name, export) in &inner.translation.component.exports {
@@ -511,13 +516,29 @@ impl Component {
                         &mut inner.resource_map,
                     );
 
+                    let export_name = Arc::<str>::from(export_name.as_str());
+                    let ty = crate::types::FuncType::from_component(f, &inner, None)?;
+
                     ensure!(
                         inner
                             .export_types
                             .root
                             .functions
                             .insert(
-                                export_name.as_str().into(),
+                                export_name.clone(),
+                                ty.clone()
+                            )
+                            .is_none(),
+                        "Duplicate function definition."
+                    );
+
+                    ensure!(
+                        inner
+                            .export_info
+                            .root
+                            .functions
+                            .insert(
+                                export_name,
                                 ComponentExport {
                                     options: options.clone(),
                                     def: match func {
@@ -525,7 +546,7 @@ impl Component {
                                         _ => unreachable!(),
                                     },
                                     func: f.clone(),
-                                    ty: crate::types::FuncType::from_component(f, &inner, None)?
+                                    ty
                                 }
                             )
                             .is_none(),
@@ -566,14 +587,26 @@ impl Component {
                             func: f.clone(),
                             ty: crate::types::FuncType::from_component(f, &inner, None)?,
                         };
+                        let func_name = Arc::<str>::from(func_name.as_str());
                         ensure!(
                             inner
                                 .export_types
                                 .instances
                                 .entry(inner.interface_identifiers[id.index()].clone())
-                                .or_insert_with(ExportTypesInstance::new)
+                                .or_insert_with(ComponentTypesInstance::new)
                                 .functions
-                                .insert(func_name.as_str().into(), exp)
+                                .insert(func_name.clone(), exp.ty.clone())
+                                .is_none(),
+                            "Duplicate function definition."
+                        );
+                        ensure!(
+                            inner
+                                .export_info
+                                .instances
+                                .entry(inner.interface_identifiers[id.index()].clone())
+                                .or_default()
+                                .functions
+                                .insert(func_name, exp)
                                 .is_none(),
                             "Duplicate function definition."
                         );
@@ -732,7 +765,8 @@ struct ComponentInner {
     /// Maps between export names and world keys.
     pub export_names: FxHashMap<String, WorldKey>,
     /// The exports of the component.
-    pub export_types: ExportTypes,
+    pub export_types: ComponentTypes,
+    pub export_info: ExportTypes,
     /// The memories that this component instantiates and references.
     pub extracted_memories: FxHashMap<RuntimeMemoryIndex, CoreExport<MemoryIndex>>,
     /// The reallocation functions that this component instantiates and references.
@@ -748,7 +782,7 @@ struct ComponentInner {
     /// The component's globally-unique ID.
     pub id: u64,
     /// The imports of the component.
-    pub import_types: ImportTypes,
+    pub import_types: ComponentTypes,
     /// A mapping from runtime module indices to static indices.
     pub instance_modules: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, StaticModuleIndex>,
     /// A mapping from interface ID to parsed identifier.
@@ -763,6 +797,8 @@ struct ComponentInner {
     pub translation: ComponentTranslation,
     /// The ID of the primary exported world.
     pub world_id: Id<World>,
+    /// The package identifier for the component.
+    pub package: PackageIdentifier,
 }
 
 impl std::fmt::Debug for ComponentInner {
@@ -780,116 +816,68 @@ struct ModuleTranslation {
 }
 
 /// Details the set of types and functions exported by a component.
-#[derive(Debug)]
-pub struct ExportTypes {
+#[derive(Debug, Default)]
+struct ExportTypes {
     /// The root instance for component exports.
     root: ExportTypesInstance,
     /// The interfaces exported by the component.
     instances: FxHashMap<InterfaceIdentifier, ExportTypesInstance>,
-    /// The package identifier for the component.
-    package: PackageIdentifier,
 }
 
-impl ExportTypes {
-    /// Creates a new export set for the given package.
-    pub(crate) fn new(package: PackageIdentifier) -> Self {
-        Self {
-            root: ExportTypesInstance::new(),
-            instances: FxHashMap::default(),
-            package,
-        }
-    }
-
-    /// Gets the root instance for this export set.
-    pub fn root(&self) -> &ExportTypesInstance {
-        &self.root
-    }
-
-    /// The package associated with all exports.
-    pub fn package(&self) -> &PackageIdentifier {
-        &self.package
-    }
-
-    /// Gets the exported instance with the provided identifier, if any.
-    pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ExportTypesInstance> {
-        self.instances.get(name)
-    }
-
-    /// Gets an iterator over all exported instances.
-    pub fn instances<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportTypesInstance)> {
-        self.instances.iter()
-    }
-}
-
-#[derive(Debug)]
-pub struct ExportTypesInstance {
+/// Represents an interface that has been exported by a component.
+#[derive(Debug, Default)]
+struct ExportTypesInstance {
+    /// The functions in the interface.
     functions: FxHashMap<Arc<str>, ComponentExport>,
-    resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
-impl ExportTypesInstance {
-    pub(crate) fn new() -> Self {
-        Self {
-            functions: FxHashMap::default(),
-            resources: FxHashMap::default(),
-        }
-    }
-
-    pub fn func(&self, name: impl AsRef<str>) -> Option<crate::types::FuncType> {
-        self.functions.get(name.as_ref()).map(|x| x.ty.clone())
-    }
-
-    pub fn funcs<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::types::FuncType)> {
-        self.functions.iter().map(|(k, v)| (&**k, v.ty.clone()))
-    }
-
-    pub fn resource(&self, name: impl AsRef<str>) -> Option<ResourceType> {
-        self.resources.get(name.as_ref()).cloned()
-    }
-
-    pub fn resources<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::types::ResourceType)> {
-        self.resources.iter().map(|(k, v)| (&**k, v.clone()))
-    }
-}
-
+/// Details a set of types within a component.
 #[derive(Debug)]
-pub struct ImportTypes {
-    root: ImportTypesInstance,
-    instances: FxHashMap<InterfaceIdentifier, ImportTypesInstance>,
+pub struct ComponentTypes {
+    /// The package root of the component.
+    root: ComponentTypesInstance,
+    /// All instances owned by the component.
+    instances: FxHashMap<InterfaceIdentifier, ComponentTypesInstance>,
 }
 
-impl ImportTypes {
+impl ComponentTypes {
+    /// Creates a new, initially empty component type set.
     pub(crate) fn new() -> Self {
         Self {
-            root: ImportTypesInstance::new(),
+            root: ComponentTypesInstance::new(),
             instances: FxHashMap::default(),
         }
     }
 
-    pub fn root(&self) -> &ImportTypesInstance {
+    /// Gets the root instance.
+    pub fn root(&self) -> &ComponentTypesInstance {
         &self.root
     }
 
-    pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ImportTypesInstance> {
+    /// Gets the instance with the specified name, if any.
+    pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ComponentTypesInstance> {
         self.instances.get(name)
     }
 
+    /// Gets an iterator over all instances by identifier.
     pub fn instances<'a>(
         &'a self,
-    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ImportTypesInstance)> {
+    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ComponentTypesInstance)> {
         self.instances.iter()
     }
 }
 
+/// Represents a specific interface from a component.
 #[derive(Debug)]
-pub struct ImportTypesInstance {
+pub struct ComponentTypesInstance {
+    /// The functions of the interface.
     functions: FxHashMap<Arc<str>, crate::types::FuncType>,
+    /// The resources of the interface.
     resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
-impl ImportTypesInstance {
+impl ComponentTypesInstance {
+    /// Creates a new, empty instance.
     pub(crate) fn new() -> Self {
         Self {
             functions: FxHashMap::default(),
@@ -897,38 +885,49 @@ impl ImportTypesInstance {
         }
     }
 
+    /// Gets the associated function by name, if any.
     pub fn func(&self, name: impl AsRef<str>) -> Option<crate::types::FuncType> {
         self.functions.get(name.as_ref()).cloned()
     }
 
+    /// Iterates over all associated functions by name.
     pub fn funcs<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::types::FuncType)> {
         self.functions.iter().map(|(k, v)| (&**k, v.clone()))
     }
 
+    /// Gets the associated abstract resource by name, if any.
     pub fn resource(&self, name: impl AsRef<str>) -> Option<ResourceType> {
         self.resources.get(name.as_ref()).cloned()
     }
 
+    /// Iterates over all associated functions by name.
     pub fn resources<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::types::ResourceType)> {
         self.resources.iter().map(|(k, v)| (&**k, v.clone()))
     }
 }
 
+/// Provides the ability to define imports for a component and create [`Instance`]s of it.
 #[derive(Clone, Debug, Default)]
 pub struct Linker {
+    /// The root instance used for linking.
     root: LinkerInstance,
+    /// The set of interfaces against which to link.
     instances: FxHashMap<InterfaceIdentifier, LinkerInstance>,
 }
 
 impl Linker {
+    /// Immutably obtains the root interface for this linker.
     pub fn root(&self) -> &LinkerInstance {
         &self.root
     }
 
+    /// Mutably obtains the root interface for this linker.
     pub fn root_mut(&mut self) -> &mut LinkerInstance {
         &mut self.root
     }
 
+    /// Creates a new instance in the linker with the provided name. Returns an
+    /// error if an instance with that name already exists.
     pub fn define_instance(&mut self, name: InterfaceIdentifier) -> Result<&mut LinkerInstance> {
         if self.instance(&name).is_none() {
             Ok(self.instances.entry(name).or_default())
@@ -937,26 +936,35 @@ impl Linker {
         }
     }
 
+    /// Immutably obtains the instance with the given name, if any.
     pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&LinkerInstance> {
         self.instances.get(name)
     }
 
+    /// Mutably obtains the instance with the given name, if any.
     pub fn instance_mut(&mut self, name: &InterfaceIdentifier) -> Option<&mut LinkerInstance> {
         self.instances.get_mut(name)
     }
 
+    /// Instantiates a component for the provided store, filling in its imports with externals
+    /// defined in this linker. All imports must be defined for instantiation to succeed.
     pub fn instantiate(&self, ctx: impl AsContextMut, component: &Component) -> Result<Instance> {
         Instance::new(ctx, component, self)
     }
 }
 
+/// Describes a concrete interface which components may import.
 #[derive(Clone, Debug, Default)]
 pub struct LinkerInstance {
+    /// The functions in the interface.
     functions: FxHashMap<Arc<str>, crate::func::Func>,
+    /// The resource types in the interface.
     resources: FxHashMap<Arc<str>, ResourceType>,
 }
 
 impl LinkerInstance {
+    /// Defines a new function for this interface with the provided name.
+    /// Fails if the function already exists.
     pub fn define_func(
         &mut self,
         name: impl Into<Arc<str>>,
@@ -971,10 +979,13 @@ impl LinkerInstance {
         Ok(())
     }
 
+    /// Gets the function in this interface with the given name, if any.
     pub fn func(&self, name: impl AsRef<str>) -> Option<crate::func::Func> {
         self.functions.get(name.as_ref()).cloned()
     }
 
+    /// Defines a new resource type for this interface with the provided name.
+    /// Fails if the resource type already exists, or if the resource is abstract.
     pub fn define_resource(
         &mut self,
         name: impl Into<Arc<str>>,
@@ -994,6 +1005,7 @@ impl LinkerInstance {
         Ok(())
     }
 
+    /// Gets the resource in this interface with the given name, if any.
     pub fn resource(&self, name: impl AsRef<str>) -> Option<ResourceType> {
         self.resources.get(name.as_ref()).cloned()
     }
@@ -1023,7 +1035,7 @@ impl Instance {
         }
 
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
-        let map = Self::create_resource_instantiation_map(&ctx, id, component, linker)?;
+        let map = Self::create_resource_instantiation_map(id, component, linker)?;
         let types = Self::generate_types(&ctx, id, component, linker, &map)?;
         let resource_tables = Arc::new(Mutex::new(vec![
             HandleTable::default();
@@ -1035,7 +1047,7 @@ impl Instance {
         ]));
         let instance = InstanceInner {
             component: component.0.clone(),
-            exports: Exports::new(component.exports().package().clone()),
+            exports: Exports::new(),
             id,
             instances: Default::default(),
             instance_flags,
@@ -1082,12 +1094,10 @@ impl Instance {
     }
 
     fn create_resource_instantiation_map(
-        ctx: impl AsContext,
         instance_id: u64,
         component: &Component,
         linker: &Linker,
     ) -> Result<FxHashMap<ResourceType, ResourceType>> {
-        let store_id = ctx.as_context().inner.data().id;
         let mut types = FxHashMap::default();
 
         for (name, resource) in component.imports().root().resources() {
@@ -1118,7 +1128,7 @@ impl Instance {
             .flat_map(|(_, x)| x.resources())
             .chain(component.exports().root().resources())
         {
-            let instantiated = resource.instantiate(store_id, instance_id)?;
+            let instantiated = resource.instantiate(instance_id)?;
             types.insert(resource, instantiated);
         }
 
@@ -1130,8 +1140,7 @@ impl Instance {
         ctx: impl AsContext,
         map: &FxHashMap<ResourceType, ResourceType>,
     ) -> Result<InstanceInner> {
-        let store_id = ctx.as_context().inner.data().id;
-        for (name, func) in &inner.component.export_types.root.functions {
+        for (name, func) in &inner.component.export_info.root.functions {
             inner.exports.root.functions.insert(
                 name.clone(),
                 Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?,
@@ -1142,16 +1151,19 @@ impl Instance {
                 .exports
                 .root
                 .resources
-                .insert(name.clone(), res.instantiate(store_id, inner.id)?);
+                .insert(name.clone(), res.instantiate(inner.id)?);
         }
 
         let mut generated_functions = Vec::new();
-        for (inst_name, inst) in &inner.component.export_types.instances {
+        for (inst_name, inst) in &inner.component.export_info.instances {
             for (name, func) in &inst.functions {
                 let export =
                     Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?;
                 generated_functions.push((inst_name.clone(), name.clone(), export));
             }
+        }
+
+        for (inst_name, inst) in &inner.component.export_types.instances {
             for (name, res) in &inst.resources {
                 inner
                     .exports
@@ -1159,7 +1171,7 @@ impl Instance {
                     .entry(inst_name.clone())
                     .or_insert_with(ExportInstance::new)
                     .resources
-                    .insert(name.clone(), res.instantiate(store_id, inner.id)?);
+                    .insert(name.clone(), res.instantiate(inner.id)?);
             }
         }
 
@@ -1210,6 +1222,7 @@ impl Instance {
             post_return,
             types: inner.types.clone(),
             instance_id: inner.id,
+            store_id: ctx.as_context().inner.data().id
         }
     }
 
@@ -1567,24 +1580,18 @@ impl Instance {
 pub struct Exports {
     root: ExportInstance,
     instances: FxHashMap<InterfaceIdentifier, ExportInstance>,
-    package: PackageIdentifier,
 }
 
 impl Exports {
-    pub(crate) fn new(package: PackageIdentifier) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             root: ExportInstance::new(),
-            instances: FxHashMap::default(),
-            package,
+            instances: FxHashMap::default()
         }
     }
 
     pub fn root(&self) -> &ExportInstance {
         &self.root
-    }
-
-    pub fn package(&self) -> &PackageIdentifier {
-        &self.package
     }
 
     pub fn instance(&self, name: &InterfaceIdentifier) -> Option<&ExportInstance> {
@@ -1682,6 +1689,7 @@ impl<T, E: backend::WasmEngine> Store<T, E> {
                     id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
                     data,
                     host_functions: FuncVec::default(),
+                    host_resources: Slab::default()
                 },
             ),
         }
@@ -1857,43 +1865,65 @@ impl<'a, T: 'a, E: backend::WasmEngine> AsContextMut for StoreContextMut<'a, T, 
     }
 }
 
+/// Holds the inner mutable state for a component model implementation.
 struct StoreInner<T, E: backend::WasmEngine> {
+    /// The unique ID of this store.
     pub id: u64,
+    /// The consumer's custom data.
     pub data: T,
+    /// The table of host functions.
     pub host_functions: FuncVec<T, E>,
+    /// The table of host resources.
+    pub host_resources: Slab<Box<dyn Any + Send + Sync>>
 }
 
+/// Denotes a trampoline used by components to interact with the host.
 #[derive(Clone, Debug)]
 enum GeneratedTrampoline {
+    /// The guest would like to call an imported function.
     ImportedFunction(ComponentImport),
+    /// The guest would like to create a new resource.
     ResourceNew(TypeResourceTableIndex),
+    /// The guest would like to obtain the representation of a resource.
     ResourceRep(TypeResourceTableIndex),
+    /// The guest would like to drop a resource.
     ResourceDrop(TypeResourceTableIndex, Option<CoreDef>),
 }
 
+/// Represents a resource handle owned by a guest instance.
 #[derive(Copy, Clone, Debug, Default)]
 struct HandleElement {
+    /// The originating instance's representation of the handle.
     pub rep: i32,
+    /// Whether this handle is owned by this instance.
     pub own: bool,
+    /// The number of times that this handle has been lent, without any borrows being returned.
     pub lend_count: i32,
 }
 
+/// Stores a set of resource handles and associated type information.
 #[derive(Clone, Debug, Default)]
 struct HandleTable {
+    /// The array of handles.
     array: VecOption<HandleElement>,
+    /// The destructor for this handle type.
     destructor: Option<wasm_runtime_layer::Func>,
+    /// A list of free slots in the array.
     free: Vec<i32>,
 }
 
 impl HandleTable {
+    /// Gets the destructor for this handle table.
     pub fn destructor(&self) -> Option<&wasm_runtime_layer::Func> {
         self.destructor.as_ref()
     }
 
+    /// Sets the destructor for this handle table.
     pub fn set_destructor(&mut self, destructor: Option<wasm_runtime_layer::Func>) {
         self.destructor = destructor;
     }
 
+    /// Gets the element at the specified slot, or fails if it is empty.
     pub fn get(&self, i: i32) -> Result<&HandleElement> {
         self.array
             .get(i as usize)
@@ -1901,6 +1931,8 @@ impl HandleTable {
             .context("Invalid handle index.")
     }
 
+    /// Sets the element at the specified slot, panicking if an element was
+    /// not already there.
     pub fn set(&mut self, i: i32, element: HandleElement) {
         *self
             .array
@@ -1908,6 +1940,7 @@ impl HandleTable {
             .expect("Invalid handle index.") = Some(element);
     }
 
+    /// Inserts a new handle into this table, returning its index.
     pub fn add(&mut self, handle: HandleElement) -> i32 {
         if let Some(i) = self.free.pop() {
             *self
@@ -1922,6 +1955,8 @@ impl HandleTable {
         }
     }
 
+    /// Removes the handle at the provided index from the table,
+    /// or fails if there was no handle present.
     pub fn remove(&mut self, i: i32) -> Result<HandleElement> {
         let res = self
             .array
@@ -1940,6 +1975,14 @@ mod tests {
 
     use super::*;
 
+    struct ScreamOnDrop;
+    
+    impl Drop for ScreamOnDrop {
+        fn drop(&mut self) {
+            println!("aaaaaaaaaAAAAAAAAAAAAAAAAAAAA");
+        }
+    }
+
     #[test]
     fn test_imports() {
         const WASM_0: &[u8] = include_bytes!("test_guest_component.wasm");
@@ -1949,8 +1992,6 @@ mod tests {
         let mut store = Store::new(&engine, ());
         let comp_0 = Component::new(&engine, WASM_0).unwrap();
         let comp = Component::new(&engine, WASM).unwrap();
-
-        let _resource = ResourceType::new(&mut store, None).unwrap();
 
         let f_func = TypedFunc::new(&mut store, |_ctx, ()| Ok(("aa".to_owned(),)));
         println!("Calling got {}", f_func.call(&mut store, ()).unwrap().0);
@@ -1972,15 +2013,7 @@ mod tests {
         //link_int.define_func("[constructor]exp", real_inst.func("[constructor]exp").unwrap()).unwrap();
         //link_int.define_func("[method]exp.test", real_inst.func("[method]exp.test").unwrap()).unwrap();
 
-        let defun = crate::func::Func::new(
-            &mut store,
-            crate::types::FuncType::new([crate::types::ValueType::S32], []),
-            |_, _, _| {
-                println!("im ded an gone");
-                Ok(())
-            },
-        );
-        let my_resource = ResourceType::new(&mut store, Some(defun)).unwrap();
+        let my_resource = ResourceType::new::<ScreamOnDrop>(); // ResourceType::with_destructor(&mut store, |_, x: String| { println!("im ded an gone {x}"); Ok(()) }).unwrap();
         let cpy = my_resource.clone();
         link_int.define_resource("exp", my_resource.clone());
 
@@ -1993,9 +2026,9 @@ mod tests {
                         [],
                         [crate::types::ValueType::Own(my_resource.clone())],
                     ),
-                    move |_, _, res| {
+                    move |ctx, _, res| {
                         res[0] = crate::values::Value::Own(
-                            crate::values::ResourceOwn::new(29, cpy.clone()).unwrap(),
+                            crate::values::ResourceOwn::new(ctx, ScreamOnDrop, cpy.clone()).unwrap(),
                         );
                         Ok(())
                     },

@@ -31,7 +31,7 @@ pub(crate) struct GuestFunc {
     pub post_return: Option<wasm_runtime_layer::Func>,
     pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
     pub types: Arc<[crate::types::ValueType]>,
-    pub instance_id: u64,
+    pub instance_id: u64
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +109,7 @@ impl Func {
                     handles_to_drop: Vec::new(),
                     required_dropped: Vec::new(),
                     instance_id: *instance_id,
+                    store_id: self.store_id
                 };
 
                 Generator::new(
@@ -156,6 +157,8 @@ impl Func {
         arguments: &[wasm_runtime_layer::Value],
         results: &mut [wasm_runtime_layer::Value],
     ) -> Result<()> {
+        ensure!(self.store_id == options.store_id, "Function stores did not match.");
+
         let args = arguments
             .iter()
             .map(TryFrom::try_from)
@@ -182,6 +185,7 @@ impl Func {
             handles_to_drop: Vec::new(),
             required_dropped: Vec::new(),
             instance_id: options.instance_id,
+            store_id: self.store_id
         };
 
         Generator::new(
@@ -210,6 +214,7 @@ pub(crate) struct GuestInvokeOptions {
     pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
     pub types: Arc<[crate::types::ValueType]>,
     pub instance_id: u64,
+    pub store_id: u64
 }
 struct FuncBindgen<'a, C: AsContextMut> {
     pub callee_interface: Option<&'a Func>,
@@ -228,6 +233,7 @@ struct FuncBindgen<'a, C: AsContextMut> {
     pub handles_to_drop: Vec<(u32, i32)>,
     pub required_dropped: Vec<(bool, u32, i32, Arc<AtomicBool>)>,
     pub instance_id: u64,
+    pub store_id: u64
 }
 
 impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
@@ -819,11 +825,12 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     );
 
                     if ty.host_destructor().is_some() {
-                        results.push(Value::Own(ResourceOwn::new(elem.rep, ty.clone())?));
+                        results.push(Value::Own(ResourceOwn::new_guest(elem.rep, ty.clone(), self.store_id, None)));
                     } else {
                         results.push(Value::Own(ResourceOwn::new_guest(
                             elem.rep,
                             ty.clone(),
+                            self.store_id,
                             table.destructor().cloned(),
                         )));
                     }
@@ -848,7 +855,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         table.set(val, elem);
                     }
 
-                    let borrow = ResourceBorrow::new(elem.rep, ty.clone());
+                    let borrow = ResourceBorrow::new(elem.rep, self.store_id, ty.clone());
                     self.required_dropped
                         .push((elem.own, res, val, borrow.dead_ref()));
                     results.push(Value::Borrow(borrow));
@@ -1159,6 +1166,10 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
 
     pub fn func(&self) -> Func {
         self.inner.clone()
+    }
+
+    pub fn ty(&self) -> FuncType {
+        self.inner.ty.clone()
     }
 }
 
