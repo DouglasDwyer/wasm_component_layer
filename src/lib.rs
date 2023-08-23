@@ -1,7 +1,7 @@
 #![deny(warnings)]
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
-#![warn(clippy::missing_docs_in_private_items)]
+//#![warn(missing_docs)]
+//#![warn(clippy::missing_docs_in_private_items)]
 
 //! Crate documentation
 
@@ -1580,8 +1580,10 @@ impl Instance {
             (val.as_u32() < u32::MAX - 1).then_some((i, val))
         }) {
             let res = ResourceType::from_resolve(id, &inner.component.0, Some(resource_map))?;
-            if let Some(Some(func)) = res.host_destructor() {
-                tables[idx.as_u32() as usize].set_destructor(Some(func));
+            match res.host_destructor() {
+                Some(Some(func)) => tables[idx.as_u32() as usize].set_destructor(Some(func)),
+                Some(None) => tables[idx.as_u32() as usize].set_destructor(ctx.as_context().inner.data().drop_host_resource.clone()),
+                _ => {}
             }
         }
 
@@ -1698,16 +1700,29 @@ impl<T, E: backend::WasmEngine> Store<T, E> {
     pub fn new(engine: &Engine<E>, data: T) -> Self {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+        let mut inner = wasm_runtime_layer::Store::new(
+            engine,
+            StoreInner {
+                id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
+                data,
+                host_functions: FuncVec::default(),
+                host_resources: Slab::default(),
+                drop_host_resource: None
+            },
+        );
+
+        inner.data_mut().drop_host_resource = Some(wasm_runtime_layer::Func::new(&mut inner, wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []), |mut ctx, args, _| {
+            if let wasm_runtime_layer::Value::I32(index) = &args[0] {
+                ctx.data_mut().host_resources.remove(*index as usize);
+                Ok(())
+            }
+            else {
+                bail!("Could not drop resource.");
+            }
+        }));
+
         Self {
-            inner: wasm_runtime_layer::Store::new(
-                engine,
-                StoreInner {
-                    id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
-                    data,
-                    host_functions: FuncVec::default(),
-                    host_resources: Slab::default()
-                },
-            ),
+            inner
         }
     }
 
@@ -1890,7 +1905,9 @@ struct StoreInner<T, E: backend::WasmEngine> {
     /// The table of host functions.
     pub host_functions: FuncVec<T, E>,
     /// The table of host resources.
-    pub host_resources: Slab<Box<dyn Any + Send + Sync>>
+    pub host_resources: Slab<Box<dyn Any + Send + Sync>>,
+    /// A function that drops a host resource from this store.
+    pub drop_host_resource: Option<wasm_runtime_layer::Func>
 }
 
 /// Denotes a trampoline used by components to interact with the host.
@@ -2007,8 +2024,8 @@ mod tests {
 
         let engine = Engine::new(wasmi::Engine::default());
         let mut store = Store::new(&engine, ());
-        let comp_0 = Component::new(&engine, WASM_0).unwrap();
-        let comp = Component::new(&engine, WASM).unwrap();
+        let comp_0 = crate::Component::new(&engine, WASM_0).unwrap();
+        let comp = crate::Component::new(&engine, WASM).unwrap();
 
         let f_func = TypedFunc::new(&mut store, |_ctx, ()| Ok(("aa".to_owned(),)));
         println!("Calling got {}", f_func.call(&mut store, ()).unwrap().0);

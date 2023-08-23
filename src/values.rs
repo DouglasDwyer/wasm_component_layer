@@ -742,12 +742,6 @@ impl ResourceOwn {
                 &[wasm_runtime_layer::Value::I32(self.rep)],
                 &mut [],
             )?;
-        } else if let Some(Some(destructor)) = self.ty.host_destructor() {
-            destructor.call(
-                ctx.as_context_mut().inner,
-                &[wasm_runtime_layer::Value::I32(self.rep)],
-                &mut [],
-            )?;
         }
 
         self.tracker.store(usize::MAX, Ordering::Release);

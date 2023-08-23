@@ -824,16 +824,12 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         "Attempted to transfer ownership of non-owned handle."
                     );
 
-                    if ty.host_destructor().is_some() {
-                        results.push(Value::Own(ResourceOwn::new_guest(elem.rep, ty.clone(), self.store_id, None)));
-                    } else {
-                        results.push(Value::Own(ResourceOwn::new_guest(
-                            elem.rep,
-                            ty.clone(),
-                            self.store_id,
-                            table.destructor().cloned(),
-                        )));
-                    }
+                    results.push(Value::Own(ResourceOwn::new_guest(
+                        elem.rep,
+                        ty.clone(),
+                        self.store_id,
+                        table.destructor().cloned(),
+                    )));
                 }
                 ValueType::Borrow(ty) => {
                     let def = match handle {
