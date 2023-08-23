@@ -410,7 +410,7 @@ impl Variant {
         );
         Ok(Self {
             discriminant: discriminant as u32,
-            value: value.map(|x| Arc::new(x)),
+            value: value.map(Arc::new),
             ty,
         })
     }
@@ -523,7 +523,7 @@ impl Deref for OptionValue {
     type Target = Option<Value>;
 
     fn deref(&self) -> &Self::Target {
-        &*self.value
+        &self.value
     }
 }
 
@@ -557,7 +557,7 @@ impl Deref for ResultValue {
     type Target = Result<Option<Value>, Option<Value>>;
 
     fn deref(&self) -> &Self::Target {
-        &*self.value
+        &self.value
     }
 }
 
@@ -588,20 +588,12 @@ impl Flags {
         let index = index as u32;
         match &self.flags {
             FlagsList::Single(x) => {
-                if (*x >> index) == 1 {
-                    true
-                } else {
-                    false
-                }
+                (*x >> index) == 1
             }
             FlagsList::Multiple(x) => {
                 let arr_index = index / u32::BITS;
                 let sub_index = index % u32::BITS;
-                if (x[arr_index as usize] >> sub_index) == 1 {
-                    true
-                } else {
-                    false
-                }
+                (x[arr_index as usize] >> sub_index) == 1
             }
         }
     }
@@ -645,7 +637,7 @@ impl Flags {
     pub(crate) fn as_u32_list(&self) -> &[u32] {
         match &self.flags {
             FlagsList::Single(x) => std::slice::from_ref(x),
-            FlagsList::Multiple(x) => &**x,
+            FlagsList::Multiple(x) => x,
         }
     }
 
@@ -1138,7 +1130,7 @@ impl<T: ComponentType> ComponentType for Vec<T> {
                 .expect("Could not downcast vector.")
         } else {
             require_matches!(&list.values, ListSpecialization::Other(x), x)
-                .into_iter()
+                .iter()
                 .map(|x| T::from_value(x))
                 .collect::<Result<_>>()?
         })

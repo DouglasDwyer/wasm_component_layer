@@ -905,9 +905,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.emit(&I32Const { val: discriminant })?;
         let mut pushed = 1;
         if let Some(ty) = cases
-            .into_iter()
-            .skip(discriminant as usize)
-            .next()
+            .into_iter().nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
             // Using the payload of this block we lower the type to
@@ -1147,9 +1145,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
             let has_value = if let Some(ty) =
                 cases
-                    .into_iter()
-                    .skip(discriminant as usize)
-                    .next()
+                    .into_iter().nth(discriminant as usize)
                     .ok_or_else(|| Error::msg("Invalid discriminant value."))?
             {
                 // Push only the values we need for this variant onto
@@ -1326,13 +1322,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.stack.push(addr.clone());
         self.store_intrepr(offset, tag)?;
         if let Some(ty) = cases
-            .into_iter()
-            .skip(discriminant as usize)
-            .next()
+            .into_iter().nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
-            self.stack.push(payload_name.clone());
-            self.write_to_memory(ty, addr.clone(), payload_offset)?;
+            self.stack.push(payload_name);
+            self.write_to_memory(ty, addr, payload_offset)?;
         }
 
         Ok(())
@@ -1494,7 +1488,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 }
 
                 TypeDefKind::Enum(e) => {
-                    self.stack.push(addr.clone());
+                    self.stack.push(addr);
                     self.load_intrepr(offset, e.tag())?;
                     self.lift(ty)
                 }
@@ -1549,12 +1543,10 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         if let Instruction::ReadI32 { value } = variant {
             let disc = value.get();
             let has_value = if let Some(ty) = cases
-                .into_iter()
-                .skip(disc as usize)
-                .next()
+                .into_iter().nth(disc as usize)
                 .ok_or_else(|| Error::msg("Invalid discriminant value."))?
             {
-                self.read_from_memory(ty, addr.clone(), payload_offset)?;
+                self.read_from_memory(ty, addr, payload_offset)?;
                 true
             } else {
                 false
@@ -1745,15 +1737,13 @@ fn push_wasm_variants<'a>(
     // "unification" so we can handle things like `Result<i32,
     // f32>` where that turns into `[i32 i32]` where the second
     // `i32` might be the `f32` bitcasted.
-    for ty in tys {
-        if let Some(ty) = ty {
-            push_wasm(resolve, variant, ty, &mut temp);
+    for ty in tys.into_iter().flatten() {
+        push_wasm(resolve, variant, ty, &mut temp);
 
-            for (i, ty) in temp.drain(..).enumerate() {
-                match result.get_mut(start + i) {
-                    Some(prev) => *prev = join(*prev, ty),
-                    None => result.push(ty),
-                }
+        for (i, ty) in temp.drain(..).enumerate() {
+            match result.get_mut(start + i) {
+                Some(prev) => *prev = join(*prev, ty),
+                None => result.push(ty),
             }
         }
     }

@@ -544,10 +544,7 @@ impl ResourceType {
     }
 
     pub(crate) fn is_instantiated(&self) -> bool {
-        match &self.kind {
-            ResourceKindValue::Abstract { .. } => false,
-            _ => true,
-        }
+        !matches!(&self.kind, ResourceKindValue::Abstract { .. })
     }
 }
 
@@ -760,6 +757,7 @@ impl ComponentList for () {
     }
 }
 
+#[allow(clippy::extra_unused_type_parameters)]
 const fn one<T>() -> usize { 1 }
 
 macro_rules! impl_component_list {

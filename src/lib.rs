@@ -1,7 +1,7 @@
 #![deny(warnings)]
 #![forbid(unsafe_code)]
-//#![warn(missing_docs)]
-//#![warn(clippy::missing_docs_in_private_items)]
+#![warn(missing_docs)]
+#![warn(clippy::missing_docs_in_private_items)]
 
 //! Crate documentation
 
@@ -46,6 +46,7 @@ pub use crate::types::*;
 pub use crate::values::*;
 
 /// A parsed and validated WebAssembly component, which may be used to instantiate [`Instance`]s.
+#[derive(Clone, Debug)]
 pub struct Component(Arc<ComponentInner>);
 
 impl Component {
@@ -68,6 +69,7 @@ impl Component {
         &self.0.import_types
     }
 
+    /// The root package of this component.
     pub fn package(&self) -> &PackageIdentifier {
         &self.0.package
     }
@@ -421,7 +423,7 @@ impl Component {
             }
         }
 
-        for (_, trampoline) in &mut inner.generated_trampolines {
+        for trampoline in inner.generated_trampolines.values_mut() {
             if let GeneratedTrampoline::ResourceDrop(x, destructor) = trampoline {
                 let resource = &types[*x];
                 if let Some(resource_idx) = inner
@@ -487,7 +489,7 @@ impl Component {
         let mut types = ComponentTypesBuilder::default();
         let mut validator = Self::create_component_validator();
 
-        let (translation, modules) = Translator::new(&tunables, &mut validator, &mut types, &scope)
+        let (translation, modules) = Translator::new(&tunables, &mut validator, &mut types, scope)
             .translate(bytes)
             .context("Could not translate input component to core WASM.")?;
 
@@ -860,6 +862,7 @@ impl ComponentTypes {
     }
 
     /// Gets an iterator over all instances by identifier.
+    #[allow(clippy::needless_lifetimes)]
     pub fn instances<'a>(
         &'a self,
     ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ComponentTypesInstance)> {
@@ -891,7 +894,7 @@ impl ComponentTypesInstance {
     }
 
     /// Iterates over all associated functions by name.
-    pub fn funcs<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::types::FuncType)> {
+    pub fn funcs(&self) -> impl Iterator<Item = (&'_ str, crate::types::FuncType)> {
         self.functions.iter().map(|(k, v)| (&**k, v.clone()))
     }
 
@@ -901,7 +904,7 @@ impl ComponentTypesInstance {
     }
 
     /// Iterates over all associated functions by name.
-    pub fn resources<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::types::ResourceType)> {
+    pub fn resources(&self) -> impl Iterator<Item = (&'_ str, crate::types::ResourceType)> {
         self.resources.iter().map(|(k, v)| (&**k, v.clone()))
     }
 }
@@ -1011,10 +1014,12 @@ impl LinkerInstance {
     }
 }
 
+/// An instantiated WebAssembly component.
 #[derive(Clone, Debug)]
 pub struct Instance(Arc<InstanceInner>);
 
 impl Instance {
+    /// Creates a new instance for the given component with the specified linker.
     pub(crate) fn new(
         mut ctx: impl AsContextMut,
         component: &Component,
@@ -1036,7 +1041,7 @@ impl Instance {
 
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(id, component, linker)?;
-        let types = Self::generate_types(&ctx, id, component, linker, &map)?;
+        let types = Self::generate_types(component, &map)?;
         let resource_tables = Arc::new(Mutex::new(vec![
             HandleTable::default();
             component
@@ -1046,7 +1051,7 @@ impl Instance {
                 .num_resource_tables
         ]));
         let instance = InstanceInner {
-            component: component.0.clone(),
+            component: component.clone(),
             exports: Exports::new(),
             id,
             instances: Default::default(),
@@ -1059,19 +1064,19 @@ impl Instance {
         Ok(Self(Arc::new(exported)))
     }
 
-    pub fn component(&self) -> Component {
-        Component(self.0.component.clone())
+    /// Gets the component associated with this instance.
+    pub fn component(&self) -> &Component {
+        &self.0.component
     }
 
+    /// Gets the exports of this instance.
     pub fn exports(&self) -> &Exports {
         &self.0.exports
     }
 
+    /// Generates the concrete list of types for this instance, after replacing abstract resources with instantiated ones.
     fn generate_types(
-        _ctx: impl AsContext,
-        _instance_id: u64,
         component: &Component,
-        _linker: &Linker,
         map: &FxHashMap<ResourceType, ResourceType>,
     ) -> Result<Arc<[crate::types::ValueType]>> {
         let mut types = Vec::with_capacity(component.0.resolve.types.len());
@@ -1086,13 +1091,15 @@ impl Instance {
                 types.push(crate::types::ValueType::from_component_typedef(
                     id,
                     &component.0,
-                    Some(&map),
+                    Some(map),
                 )?);
             }
         }
         Ok(types.into())
     }
 
+    /// Creates a mapping from component resources to instance resources,
+    /// since resource types are unique per instantiation.
     fn create_resource_instantiation_map(
         instance_id: u64,
         component: &Component,
@@ -1135,18 +1142,19 @@ impl Instance {
         Ok(types)
     }
 
+    /// Fills in the exports map for the instance.
     fn load_exports(
         mut inner: InstanceInner,
         ctx: impl AsContext,
         map: &FxHashMap<ResourceType, ResourceType>,
     ) -> Result<InstanceInner> {
-        for (name, func) in &inner.component.export_info.root.functions {
+        for (name, func) in &inner.component.0.export_info.root.functions {
             inner.exports.root.functions.insert(
                 name.clone(),
                 Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?,
             );
         }
-        for (name, res) in &inner.component.export_types.root.resources {
+        for (name, res) in &inner.component.0.export_types.root.resources {
             inner
                 .exports
                 .root
@@ -1155,7 +1163,7 @@ impl Instance {
         }
 
         let mut generated_functions = Vec::new();
-        for (inst_name, inst) in &inner.component.export_info.instances {
+        for (inst_name, inst) in &inner.component.0.export_info.instances {
             for (name, func) in &inst.functions {
                 let export =
                     Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map)?;
@@ -1163,7 +1171,7 @@ impl Instance {
             }
         }
 
-        for (inst_name, inst) in &inner.component.export_types.instances {
+        for (inst_name, inst) in &inner.component.0.export_types.instances {
             for (name, res) in &inst.resources {
                 inner
                     .exports
@@ -1187,6 +1195,7 @@ impl Instance {
         Ok(inner)
     }
 
+    /// Creates the options used to invoke an imported function.
     fn import_function(
         inner: &InstanceInner,
         ctx: impl AsContext,
@@ -1194,26 +1203,26 @@ impl Instance {
         func: &Function,
     ) -> GuestInvokeOptions {
         let memory = options.memory.map(|idx| {
-            Self::core_export(inner, &ctx, &inner.component.extracted_memories[&idx])
+            Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&idx])
                 .expect("Could not get runtime memory export.")
                 .into_memory()
                 .expect("Export was not of memory type.")
         });
         let realloc = options.realloc.map(|idx| {
-            Self::core_export(inner, &ctx, &inner.component.extracted_reallocs[&idx])
+            Self::core_export(inner, &ctx, &inner.component.0.extracted_reallocs[&idx])
                 .expect("Could not get runtime realloc export.")
                 .into_func()
                 .expect("Export was not of func type.")
         });
         let post_return = options.post_return.map(|idx| {
-            Self::core_export(inner, &ctx, &inner.component.extracted_post_returns[&idx])
+            Self::core_export(inner, &ctx, &inner.component.0.extracted_post_returns[&idx])
                 .expect("Could not get runtime post return export.")
                 .into_func()
                 .expect("Export was not of func type.")
         });
 
         GuestInvokeOptions {
-            component: inner.component.clone(),
+            component: inner.component.0.clone(),
             encoding: options.string_encoding,
             function: func.clone(),
             memory,
@@ -1226,6 +1235,7 @@ impl Instance {
         }
     }
 
+    /// Creates an exported function from the provided definitions.
     fn export_function(
         inner: &InstanceInner,
         ctx: impl AsContext,
@@ -1239,19 +1249,19 @@ impl Instance {
             .into_func()
             .expect("Export was not of func type.");
         let memory = options.memory.map(|idx| {
-            Self::core_export(inner, &ctx, &inner.component.extracted_memories[&idx])
+            Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&idx])
                 .expect("Could not get runtime memory export.")
                 .into_memory()
                 .expect("Export was not of memory type.")
         });
         let realloc = options.realloc.map(|idx| {
-            Self::core_export(inner, &ctx, &inner.component.extracted_reallocs[&idx])
+            Self::core_export(inner, &ctx, &inner.component.0.extracted_reallocs[&idx])
                 .expect("Could not get runtime realloc export.")
                 .into_func()
                 .expect("Export was not of func type.")
         });
         let post_return = options.post_return.map(|idx| {
-            Self::core_export(inner, &ctx, &inner.component.extracted_post_returns[&idx])
+            Self::core_export(inner, &ctx, &inner.component.0.extracted_post_returns[&idx])
                 .expect("Could not get runtime post return export.")
                 .into_func()
                 .expect("Export was not of func type.")
@@ -1259,10 +1269,10 @@ impl Instance {
 
         Ok(crate::func::Func {
             store_id: ctx.as_context().inner.data().id,
-            ty: crate::types::FuncType::from_component(func, &inner.component, Some(mapping))?,
+            ty: crate::types::FuncType::from_component(func, &inner.component.0, Some(mapping))?,
             backing: FuncImpl::GuestFunc(Arc::new(GuestFunc {
                 callee,
-                component: inner.component.clone(),
+                component: inner.component.0.clone(),
                 encoding: options.string_encoding,
                 function: func.clone(),
                 memory,
@@ -1275,6 +1285,7 @@ impl Instance {
         })
     }
 
+    /// Gets the core WASM import associated with the provided definition.
     fn core_import(
         inner: &InstanceInner,
         mut ctx: impl AsContextMut,
@@ -1296,6 +1307,7 @@ impl Instance {
                 };
                 match inner
                     .component
+                    .0
                     .generated_trampolines
                     .get(x)
                     .context("Could not find exported trampoline.")?
@@ -1303,10 +1315,10 @@ impl Instance {
                     GeneratedTrampoline::ImportedFunction(component_import) => {
                         let expected = crate::types::FuncType::from_component(
                             &component_import.func,
-                            &inner.component,
+                            &inner.component.0,
                             Some(resource_map),
                         )?;
-                        let func = Self::get_component_import(inner, component_import, linker)?;
+                        let func = Self::get_component_import(component_import, linker)?;
                         ensure!(
                             func.ty() == expected,
                             "Function import {} had type {:?}, but expected {expected:?}",
@@ -1415,6 +1427,7 @@ impl Instance {
         }
     }
 
+    /// Gets the core WASM export associated with the provided definition.
     fn core_export<T: Copy + Into<wasmtime_environ::EntityIndex>>(
         inner: &InstanceInner,
         ctx: impl AsContext,
@@ -1422,15 +1435,16 @@ impl Instance {
     ) -> Option<Extern> {
         let name = match &export.item {
             ExportItem::Index(idx) => {
-                &inner.component.export_mapping[&inner.component.instance_modules[export.instance]]
+                &inner.component.0.export_mapping[&inner.component.0.instance_modules[export.instance]]
                     [&(*idx).into()]
             }
             ExportItem::Name(s) => s,
         };
 
-        inner.instances[export.instance].get_export(&ctx.as_context().inner, &name)
+        inner.instances[export.instance].get_export(&ctx.as_context().inner, name)
     }
 
+    /// Handles all global initializers and instantiates the set of WASM modules for this component.
     fn global_initialize(
         mut inner: InstanceInner,
         mut ctx: impl AsContextMut,
@@ -1438,16 +1452,16 @@ impl Instance {
         resource_map: &FxHashMap<ResourceType, ResourceType>,
     ) -> Result<InstanceInner> {
         let mut destructors = Vec::new();
-        for initializer in &inner.component.translation.component.initializers {
+        for initializer in &inner.component.0.translation.component.initializers {
             match initializer {
                 GlobalInitializer::InstantiateModule(InstantiateModule::Static(idx, def)) => {
-                    let module = &inner.component.modules[idx];
+                    let module = &inner.component.0.modules[idx];
                     let imports = Self::generate_imports(
                         &inner,
                         &mut ctx,
                         linker,
                         module,
-                        &def,
+                        def,
                         &mut destructors,
                         resource_map,
                     )?;
@@ -1470,6 +1484,7 @@ impl Instance {
         Self::fill_destructors(inner, ctx, destructors, resource_map)
     }
 
+    /// Generates the set of core WASM imports for this component.
     fn generate_imports(
         inner: &InstanceInner,
         mut store: impl AsContextMut,
@@ -1516,8 +1531,8 @@ impl Instance {
         Ok(imports)
     }
 
+    /// Gets an import from the linker for this component.
     fn get_component_import(
-        _inner: &InstanceInner,
         import: &ComponentImport,
         linker: &Linker,
     ) -> Result<crate::func::Func> {
@@ -1546,7 +1561,7 @@ impl Instance {
 
         for index in destructors {
             let (x, def) = require_matches!(
-                &inner.component.generated_trampolines[&index],
+                &inner.component.0.generated_trampolines[&index],
                 GeneratedTrampoline::ResourceDrop(x, def),
                 (x, def)
             );
@@ -1560,11 +1575,11 @@ impl Instance {
             }
         }
 
-        for (id, idx) in inner.component.resolve.types.iter().filter_map(|(i, _)| {
-            let val = inner.component.resource_map[i.index()];
+        for (id, idx) in inner.component.0.resolve.types.iter().filter_map(|(i, _)| {
+            let val = inner.component.0.resource_map[i.index()];
             (val.as_u32() < u32::MAX - 1).then_some((i, val))
         }) {
-            let res = ResourceType::from_resolve(id, &inner.component, Some(resource_map))?;
+            let res = ResourceType::from_resolve(id, &inner.component.0, Some(resource_map))?;
             if let Some(Some(func)) = res.host_destructor() {
                 tables[idx.as_u32() as usize].set_destructor(Some(func));
             }
@@ -1598,6 +1613,7 @@ impl Exports {
         self.instances.get(name)
     }
 
+    #[allow(clippy::needless_lifetimes)]
     pub fn instances<'a>(
         &'a self,
     ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportInstance)> {
@@ -1623,7 +1639,7 @@ impl ExportInstance {
         self.functions.get(name.as_ref()).cloned()
     }
 
-    pub fn funcs<'a>(&'a self) -> impl Iterator<Item = (&'a str, crate::func::Func)> {
+    pub fn funcs(&self) -> impl Iterator<Item = (&'_ str, crate::func::Func)> {
         self.functions.iter().map(|(k, v)| (&**k, v.clone()))
     }
 
@@ -1631,14 +1647,14 @@ impl ExportInstance {
         self.resources.get(name.as_ref()).cloned()
     }
 
-    pub fn resources<'a>(&'a self) -> impl Iterator<Item = (&'a str, ResourceType)> {
+    pub fn resources(&self) -> impl Iterator<Item = (&'_ str, ResourceType)> {
         self.resources.iter().map(|(k, v)| (&**k, v.clone()))
     }
 }
 
 #[derive(Debug)]
 struct InstanceInner {
-    pub component: Arc<ComponentInner>,
+    pub component: Component,
     pub exports: Exports,
     pub id: u64,
     pub instance_flags: wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>,
@@ -1684,7 +1700,7 @@ impl<T, E: backend::WasmEngine> Store<T, E> {
 
         Self {
             inner: wasm_runtime_layer::Store::new(
-                &engine,
+                engine,
                 StoreInner {
                     id: ID_COUNTER.fetch_add(1, Ordering::AcqRel),
                     data,
@@ -1878,6 +1894,7 @@ struct StoreInner<T, E: backend::WasmEngine> {
 }
 
 /// Denotes a trampoline used by components to interact with the host.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 enum GeneratedTrampoline {
     /// The guest would like to call an imported function.

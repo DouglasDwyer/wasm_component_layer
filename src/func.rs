@@ -99,13 +99,13 @@ impl Func {
                     results,
                     callee_interface: None,
                     callee_wasm: Some(callee),
-                    component: &**component,
+                    component,
                     encoding,
                     memory,
                     realloc,
-                    resource_tables: &resource_tables,
+                    resource_tables,
                     post_return,
-                    types: &types,
+                    types,
                     handles_to_drop: Vec::new(),
                     required_dropped: Vec::new(),
                     instance_id: *instance_id,
@@ -121,7 +121,7 @@ impl Func {
                 .call(function)
             }
             FuncImpl::HostFunc(idx) => {
-                let callee = ctx.as_context().inner.data().host_functions.get(&idx);
+                let callee = ctx.as_context().inner.data().host_functions.get(idx);
                 (callee)(ctx.as_context_mut(), arguments, results)?;
                 self.ty.match_results(results)
             }
@@ -258,7 +258,7 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
         self.memory.as_ref().expect("No memory").read(
             self.ctx.as_context().inner,
             offset,
-            &mut Arc::get_mut(&mut raw_memory).expect("Could not get exclusive reference."),
+            Arc::get_mut(&mut raw_memory).expect("Could not get exclusive reference."),
         )?;
         Ok(B::from_le_array(raw_memory))
     }
@@ -556,7 +556,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             Instruction::BoolFromI32 => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
-                results.push(Value::Bool(if x > 0 { true } else { false }))
+                results.push(Value::Bool(x > 0))
             ),
             Instruction::I32FromBool => require_matches!(
                 operands.pop(),
@@ -1032,7 +1032,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
 
                 self.callee_interface
                     .expect("No available interface callee.")
-                    .call(self.ctx.as_context_mut(), &operands, &mut results[..])?;
+                    .call(self.ctx.as_context_mut(), operands, &mut results[..])?;
             }
             Instruction::Return { amt: _, func: _ } => {
                 if let Some(post) = &self.post_return {
@@ -1235,16 +1235,15 @@ impl<const N: usize> ByteArray for [u8; N] {
     }
 }
 
+type FunctionBacking<T, E> = dyn 'static
+    + Send
+    + Sync
+    + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
+
+type FunctionBackingKeyPair<T, E> = (Arc<AtomicUsize>, Arc<FunctionBacking<T, E>>,);
+
 pub(crate) struct FuncVec<T, E: backend::WasmEngine> {
-    functions: Vec<(
-        Arc<AtomicUsize>,
-        Arc<
-            dyn 'static
-                + Send
-                + Sync
-                + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>,
-        >,
-    )>,
+    functions: Vec<FunctionBackingKeyPair<T, E>>
 }
 
 impl<T, E: backend::WasmEngine> FuncVec<T, E> {
@@ -1263,9 +1262,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
     pub fn get(
         &self,
         value: &AtomicUsize,
-    ) -> Arc<
-        dyn 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>,
-    > {
+    ) -> Arc<FunctionBacking<T, E>> {
         self.functions[value.load(Ordering::Acquire)].1.clone()
     }
 
