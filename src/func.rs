@@ -1,4 +1,3 @@
-
 use std::marker::*;
 use std::mem::*;
 use std::sync::atomic::*;
@@ -45,7 +44,7 @@ pub(crate) struct GuestFunc {
     /// The types to use.
     pub types: Arc<[crate::types::ValueType]>,
     /// The instance ID to use.
-    pub instance_id: u64
+    pub instance_id: u64,
 }
 
 /// A component model function that may be invoked to interact with an `Instance`.
@@ -81,7 +80,7 @@ impl Func {
     }
 
     /// Calls this function, returning an error if:
-    /// 
+    ///
     /// - The store did not match the original.
     /// - The arguments or results did not match the signature.
     /// - A trap occurred.
@@ -116,7 +115,10 @@ impl Func {
                     instance_id,
                 } = &**x;
 
-                ensure!(!state_table.dropped.load(Ordering::Acquire), "Instance had been dropped.");
+                ensure!(
+                    !state_table.dropped.load(Ordering::Acquire),
+                    "Instance had been dropped."
+                );
 
                 let mut bindgen = FuncBindgen {
                     ctx,
@@ -135,7 +137,7 @@ impl Func {
                     handles_to_drop: Vec::new(),
                     required_dropped: Vec::new(),
                     instance_id: *instance_id,
-                    store_id: self.store_id
+                    store_id: self.store_id,
                 };
 
                 Generator::new(
@@ -190,7 +192,10 @@ impl Func {
         arguments: &[wasm_runtime_layer::Value],
         results: &mut [wasm_runtime_layer::Value],
     ) -> Result<()> {
-        ensure!(self.store_id == options.store_id, "Function stores did not match.");
+        ensure!(
+            self.store_id == options.store_id,
+            "Function stores did not match."
+        );
 
         let args = arguments
             .iter()
@@ -218,7 +223,7 @@ impl Func {
             handles_to_drop: Vec::new(),
             required_dropped: Vec::new(),
             instance_id: options.instance_id,
-            store_id: self.store_id
+            store_id: self.store_id,
         };
 
         Generator::new(
@@ -258,7 +263,7 @@ pub(crate) struct GuestInvokeOptions {
     /// The instance ID to use.
     pub instance_id: u64,
     /// The store ID to use.
-    pub store_id: u64
+    pub store_id: u64,
 }
 
 /// Manages the invocation of a component model function with the canonical ABI.
@@ -296,7 +301,7 @@ struct FuncBindgen<'a, C: AsContextMut> {
     /// The instance ID to use.
     pub instance_id: u64,
     /// The store ID to use.
-    pub store_id: u64
+    pub store_id: u64,
 }
 
 impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
@@ -658,7 +663,10 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 results.push(Value::S32(ptr));
                 results.push(Value::S32(encoded.len() as i32));
             }
-            Instruction::ListCanonLower { element, realloc: _ } => {
+            Instruction::ListCanonLower {
+                element,
+                realloc: _,
+            } => {
                 let list = require_matches!(operands.pop(), Some(Value::List(x)), x);
                 let align = self.component.size_align.align(element);
                 let size = self.component.size_align.size(element);
@@ -772,7 +780,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     _ => unreachable!(),
                 }));
             }
-            Instruction::ListLift { element: _, ty, len: _ } => {
+            Instruction::ListLift {
+                element: _,
+                ty,
+                len: _,
+            } => {
                 let ty = self.types[ty.index()].clone();
                 results.push(Value::List(List::new(
                     require_matches!(ty, crate::types::ValueType::List(x), x),
@@ -782,7 +794,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             Instruction::ReadI32 { value } => {
                 value.set(require_matches!(operands.pop(), Some(Value::S32(x)), x))
             }
-            Instruction::RecordLower { record: _, name: _, ty } => {
+            Instruction::RecordLower {
+                record: _,
+                name: _,
+                ty,
+            } => {
                 let official_ty =
                     require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
                 let record = require_matches!(operands.pop(), Some(Value::Record(x)), x);
@@ -801,7 +817,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     results[index] = value;
                 }
             }
-            Instruction::RecordLift { record: _, name: _, ty } => {
+            Instruction::RecordLift {
+                record: _,
+                name: _,
+                ty,
+            } => {
                 let official_ty =
                     require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
                 ensure!(
@@ -817,7 +837,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 )));
                 operands.clear();
             }
-            Instruction::HandleLower { handle, name: _, ty } => match &self.types[ty.index()] {
+            Instruction::HandleLower {
+                handle,
+                name: _,
+                ty,
+            } => match &self.types[ty.index()] {
                 ValueType::Own(_ty) => {
                     let def = match handle {
                         Handle::Own(x) => x,
@@ -867,7 +891,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
                 _ => unreachable!(),
             },
-            Instruction::HandleLift { handle, name: _, ty } => match &self.types[ty.index()] {
+            Instruction::HandleLift {
+                handle,
+                name: _,
+                ty,
+            } => match &self.types[ty.index()] {
                 ValueType::Own(ty) => {
                     let def = match handle {
                         Handle::Own(x) => x,
@@ -935,13 +963,21 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     operands.drain(..),
                 )));
             }
-            Instruction::FlagsLower { flags: _, name: _, ty: _ } => {
+            Instruction::FlagsLower {
+                flags: _,
+                name: _,
+                ty: _,
+            } => {
                 let flags = require_matches!(operands.pop(), Some(Value::Flags(x)), x);
                 if flags.ty().names().len() > 0 {
                     results.extend(flags.as_u32_list().iter().map(|x| Value::S32(*x as i32)));
                 }
             }
-            Instruction::FlagsLift { flags: _, name: _, ty } => {
+            Instruction::FlagsLift {
+                flags: _,
+                name: _,
+                ty,
+            } => {
                 let flags = require_matches!(&self.types[ty.index()], ValueType::Flags(x), x);
 
                 let list = match operands.len() {
@@ -994,11 +1030,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
             }
             Instruction::VariantLift {
-                
-                
-                ty,
-                discriminant,
-                ..
+                ty, discriminant, ..
             } => {
                 let variant_ty =
                     require_matches!(&self.types[ty.index()], ValueType::Variant(x), x);
@@ -1022,7 +1054,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     value,
                 )?));
             }
-            Instruction::EnumLower { enum_: _, name: _, ty: _ } => {
+            Instruction::EnumLower {
+                enum_: _,
+                name: _,
+                ty: _,
+            } => {
                 let en = require_matches!(operands.pop(), Some(Value::Enum(x)), x);
                 results.push(Value::S32(en.discriminant() as i32));
             }
@@ -1039,10 +1075,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 )?));
             }
             Instruction::OptionLift {
-                
-                ty,
-                discriminant,
-                ..
+                ty, discriminant, ..
             } => {
                 let option_ty = require_matches!(&self.types[ty.index()], ValueType::Option(x), x);
                 results.push(Value::Option(OptionValue::new(
@@ -1055,10 +1088,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 )?));
             }
             Instruction::ResultLift {
-                
-                discriminant,
-                ty,
-                ..
+                discriminant, ty, ..
             } => {
                 let result_ty = require_matches!(&self.types[ty.index()], ValueType::Result(x), x);
                 results.push(Value::Result(ResultValue::new(
@@ -1111,7 +1141,9 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     .try_lock()
                     .expect("Could not lock resource table.");
                 for (res, idx) in &self.handles_to_drop {
-                    tables[*res as usize].remove(*idx).expect("Could not find handle to drop.");
+                    tables[*res as usize]
+                        .remove(*idx)
+                        .expect("Could not find handle to drop.");
                 }
 
                 for (own, res, idx, ptr) in &self.required_dropped {
@@ -1119,7 +1151,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         Arc::strong_count(ptr) == 1,
                         "Borrow was not dropped at the end of method."
                     );
-                    
+
                     if *own {
                         let table = &mut tables[*res as usize];
                         let mut elem = *table.get(*idx)?;
@@ -1225,7 +1257,7 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
     }
 
     /// Calls this function, returning an error if:
-    /// 
+    ///
     /// - The store did not match the original.
     /// - A trap occurred.
     pub fn call(&self, ctx: impl AsContextMut, params: P) -> Result<R> {
@@ -1323,18 +1355,16 @@ impl<const N: usize> ByteArray for [u8; N] {
 }
 
 /// The type of a dynamic host function.
-type FunctionBacking<T, E> = dyn 'static
-    + Send
-    + Sync
-    + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
+type FunctionBacking<T, E> =
+    dyn 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
 
 /// The type of the key used in the vector of host functions.
-type FunctionBackingKeyPair<T, E> = (Arc<AtomicUsize>, Arc<FunctionBacking<T, E>>,);
+type FunctionBackingKeyPair<T, E> = (Arc<AtomicUsize>, Arc<FunctionBacking<T, E>>);
 
 /// A vector for functions that automatically drops items when the references are dropped.
 pub(crate) struct FuncVec<T, E: backend::WasmEngine> {
     /// The functions stored in the vector.
-    functions: Vec<FunctionBackingKeyPair<T, E>>
+    functions: Vec<FunctionBackingKeyPair<T, E>>,
 }
 
 impl<T, E: backend::WasmEngine> FuncVec<T, E> {
@@ -1352,10 +1382,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
     }
 
     /// Gets a function from the vector.
-    pub fn get(
-        &self,
-        value: &AtomicUsize,
-    ) -> Arc<FunctionBacking<T, E>> {
+    pub fn get(&self, value: &AtomicUsize) -> Arc<FunctionBacking<T, E>> {
         self.functions[value.load(Ordering::Acquire)].1.clone()
     }
 

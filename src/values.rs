@@ -9,10 +9,10 @@ use anyhow::*;
 use once_cell::sync::*;
 use private::*;
 
-use crate::AsContextMut;
 use crate::require_matches::require_matches;
 use crate::types::*;
 use crate::AsContext;
+use crate::AsContextMut;
 
 /// Represents a component model type.
 #[derive(Clone, Debug, PartialEq)]
@@ -344,7 +344,10 @@ impl Record {
 
     /// Gets the field with the provided name, if any.
     pub fn field(&self, field: impl AsRef<str>) -> Option<Value> {
-        self.fields.iter().filter_map(|(name, val)| (&**name == field.as_ref()).then(|| val.clone())).next()
+        self.fields
+            .iter()
+            .filter_map(|(name, val)| (&**name == field.as_ref()).then(|| val.clone()))
+            .next()
     }
 
     /// Gets an iterator over the fields of this record.
@@ -695,9 +698,7 @@ impl Flags {
     pub fn get_index(&self, index: usize) -> bool {
         let index = index as u32;
         match &self.flags {
-            FlagsList::Single(x) => {
-                (*x >> index) == 1
-            }
+            FlagsList::Single(x) => (*x >> index) == 1,
             FlagsList::Multiple(x) => {
                 let arr_index = index / u32::BITS;
                 let sub_index = index % u32::BITS;
@@ -790,16 +791,33 @@ pub struct ResourceOwn {
 
 impl ResourceOwn {
     /// Creates a new resource for the given value. The value must match the resource type, which must be a host resource type.
-    pub fn new<T: 'static + Send + Sync + Sized>(mut ctx: impl AsContextMut, value: T, ty: ResourceType) -> Result<Self> {
+    pub fn new<T: 'static + Send + Sync + Sized>(
+        mut ctx: impl AsContextMut,
+        value: T,
+        ty: ResourceType,
+    ) -> Result<Self> {
         let mut store_ctx = ctx.as_context_mut();
         let store_id = store_ctx.inner.data().id;
-        ensure!(ty.valid_for::<T>(store_id), "Resource value was of incorrect type.");
-        let rep = store_ctx.inner.data_mut().host_resources.insert(Box::new(value)) as i32;
+        ensure!(
+            ty.valid_for::<T>(store_id),
+            "Resource value was of incorrect type."
+        );
+        let rep = store_ctx
+            .inner
+            .data_mut()
+            .host_resources
+            .insert(Box::new(value)) as i32;
 
         Ok(Self {
             tracker: Arc::default(),
             rep,
-            destructor: match ty.host_destructor().expect("Could not get host destructor value.") { Some(x) => Some(x), None => store_ctx.inner.data().drop_host_resource.clone() },
+            destructor: match ty
+                .host_destructor()
+                .expect("Could not get host destructor value.")
+            {
+                Some(x) => Some(x),
+                None => store_ctx.inner.data().drop_host_resource.clone(),
+            },
             store_id,
             ty,
         })
@@ -817,7 +835,7 @@ impl ResourceOwn {
             rep,
             destructor,
             ty,
-            store_id
+            store_id,
         }
     }
 
@@ -841,7 +859,10 @@ impl ResourceOwn {
     }
 
     /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
-    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(&self, ctx: &'a crate::StoreContext<T, E>) -> Result<&'a T> {
+    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+        &self,
+        ctx: &'a crate::StoreContext<T, E>,
+    ) -> Result<&'a T> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
@@ -852,9 +873,14 @@ impl ResourceOwn {
         );
 
         if self.ty.host_destructor().is_some() {
-            ctx.inner.data().host_resources.get(self.rep as usize).expect("Resource was not present.").downcast_ref().context("Resource was not of requested type.")
-        }
-        else {
+            ctx.inner
+                .data()
+                .host_resources
+                .get(self.rep as usize)
+                .expect("Resource was not present.")
+                .downcast_ref()
+                .context("Resource was not of requested type.")
+        } else {
             bail!("Cannot get the representation for a guest-owned resource.");
         }
     }
@@ -876,11 +902,29 @@ impl ResourceOwn {
             "Resource had remaining borrows or was already dropped."
         );
 
-        ensure!(self.ty.host_destructor().is_some(), "Resource did not originate from host.");
+        ensure!(
+            self.ty.host_destructor().is_some(),
+            "Resource did not originate from host."
+        );
 
-        ensure!(ctx.as_context_mut().inner.data_mut().host_resources.get(self.rep as usize).expect("Resource was not present.").is::<T>(), "Resource was of incorrect type.");
+        ensure!(
+            ctx.as_context_mut()
+                .inner
+                .data_mut()
+                .host_resources
+                .get(self.rep as usize)
+                .expect("Resource was not present.")
+                .is::<T>(),
+            "Resource was of incorrect type."
+        );
 
-        *ctx.as_context_mut().inner.data_mut().host_resources.remove(self.rep as usize).downcast().expect("Could not downcast resource.")
+        *ctx.as_context_mut()
+            .inner
+            .data_mut()
+            .host_resources
+            .remove(self.rep as usize)
+            .downcast()
+            .expect("Could not downcast resource.")
     }
 
     /// Drops this resource and invokes the destructor, removing it from the context.
@@ -953,12 +997,15 @@ impl ResourceBorrow {
             host_tracker: None,
             rep,
             ty,
-            store_id
+            store_id,
         }
     }
 
     /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
-    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(&self, ctx: &'a crate::StoreContext<T, E>) -> Result<&'a T> {
+    pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+        &self,
+        ctx: &'a crate::StoreContext<T, E>,
+    ) -> Result<&'a T> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
             "Incorrect store."
@@ -969,9 +1016,14 @@ impl ResourceBorrow {
         );
 
         if self.ty.host_destructor().is_some() {
-            ctx.inner.data().host_resources.get(self.rep as usize).expect("Resource was not present.").downcast_ref().context("Resource was not of requested type.")
-        }
-        else {
+            ctx.inner
+                .data()
+                .host_resources
+                .get(self.rep as usize)
+                .expect("Resource was not present.")
+                .downcast_ref()
+                .context("Resource was not of requested type.")
+        } else {
             bail!("Cannot get the representation for a guest-owned resource.");
         }
     }
@@ -1048,7 +1100,7 @@ macro_rules! impl_primitive_component_type {
                 fn from_value(value: &Value) -> Result<Self> {
                     Ok(require_matches!(value, Value::$enum_name(x), *x))
                 }
-                
+
                 fn into_value(self) -> Result<Value> {
                     Ok(Value::$enum_name(self))
                 }
@@ -1077,11 +1129,13 @@ impl ComponentType for String {
 
 impl ComponentType for Box<str> {
     fn ty() -> ValueType {
-        ValueType::String   
+        ValueType::String
     }
 
     fn from_value(value: &Value) -> Result<Self> {
-        Ok(require_matches!(value, Value::String(x), x).to_string().into())
+        Ok(require_matches!(value, Value::String(x), x)
+            .to_string()
+            .into())
     }
 
     fn into_value(self) -> Result<Value> {
@@ -1091,7 +1145,7 @@ impl ComponentType for Box<str> {
 
 impl ComponentType for Arc<str> {
     fn ty() -> ValueType {
-        ValueType::String   
+        ValueType::String
     }
 
     fn from_value(value: &Value) -> Result<Self> {
@@ -1124,18 +1178,22 @@ impl<T: ComponentType> ComponentType for Option<T> {
         let inner = require_matches!(value, Value::Option(x), x);
         if let Some(val) = &**inner {
             Ok(Some(T::from_value(val)?))
-        }
-        else {
+        } else {
             Ok(None)
         }
     }
 
     fn into_value(self) -> Result<Value> {
         if let Some(val) = self {
-            Ok(Value::Option(OptionValue::new(OptionTypeVal::<T>::ty(), Some(T::into_value(val)?))?))
-        }
-        else {
-            Ok(Value::Option(OptionValue::new(OptionTypeVal::<T>::ty(), None)?))
+            Ok(Value::Option(OptionValue::new(
+                OptionTypeVal::<T>::ty(),
+                Some(T::into_value(val)?),
+            )?))
+        } else {
+            Ok(Value::Option(OptionValue::new(
+                OptionTypeVal::<T>::ty(),
+                None,
+            )?))
         }
     }
 }
@@ -1162,7 +1220,8 @@ impl<T: ComponentType> ResultTypeValOk<T> {
     fn ty() -> ResultType {
         /// Holds an instantiated copy of the type.
         static TY: OnceCell<ResultType> = OnceCell::new();
-        TY.get_or_init(|| ResultType::new(Some(T::ty()), None)).clone()
+        TY.get_or_init(|| ResultType::new(Some(T::ty()), None))
+            .clone()
     }
 }
 
@@ -1175,14 +1234,20 @@ impl<T: ComponentType> ComponentType for Result<T, ()> {
         match &**require_matches!(value, Value::Result(x), x) {
             std::result::Result::Ok(Some(x)) => Ok(std::result::Result::Ok(T::from_value(x)?)),
             std::result::Result::Err(None) => Ok(std::result::Result::Err(())),
-            _ => bail!("Incorrect result type.")
+            _ => bail!("Incorrect result type."),
         }
     }
 
     fn into_value(self) -> Result<Value> {
         match self {
-            std::result::Result::Ok(x) => Ok(Value::Result(ResultValue::new(ResultTypeValOk::<T>::ty(), std::result::Result::Ok(Some(T::into_value(x)?)))?)),
-            std::result::Result::Err(()) => Ok(Value::Result(ResultValue::new(ResultTypeValOk::<T>::ty(), std::result::Result::Err(None))?))
+            std::result::Result::Ok(x) => Ok(Value::Result(ResultValue::new(
+                ResultTypeValOk::<T>::ty(),
+                std::result::Result::Ok(Some(T::into_value(x)?)),
+            )?)),
+            std::result::Result::Err(()) => Ok(Value::Result(ResultValue::new(
+                ResultTypeValOk::<T>::ty(),
+                std::result::Result::Err(None),
+            )?)),
         }
     }
 }
@@ -1195,7 +1260,8 @@ impl<T: ComponentType> ResultTypeValErr<T> {
     fn ty() -> ResultType {
         /// Holds an instantiated copy of the type.
         static TY: OnceCell<ResultType> = OnceCell::new();
-        TY.get_or_init(|| ResultType::new(None, Some(T::ty()))).clone()
+        TY.get_or_init(|| ResultType::new(None, Some(T::ty())))
+            .clone()
     }
 }
 
@@ -1208,14 +1274,20 @@ impl<T: ComponentType> ComponentType for Result<(), T> {
         match &**require_matches!(value, Value::Result(x), x) {
             std::result::Result::Ok(None) => Ok(std::result::Result::Ok(())),
             std::result::Result::Err(Some(v)) => Ok(std::result::Result::Err(T::from_value(v)?)),
-            _ => bail!("Incorrect result type.")
+            _ => bail!("Incorrect result type."),
         }
     }
 
     fn into_value(self) -> Result<Value> {
         match self {
-            std::result::Result::Ok(()) => Ok(Value::Result(ResultValue::new(ResultTypeValErr::<T>::ty(), std::result::Result::Ok(None))?)),
-            std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(ResultTypeValErr::<T>::ty(), std::result::Result::Err(Some(T::into_value(v)?)))?))
+            std::result::Result::Ok(()) => Ok(Value::Result(ResultValue::new(
+                ResultTypeValErr::<T>::ty(),
+                std::result::Result::Ok(None),
+            )?)),
+            std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(
+                ResultTypeValErr::<T>::ty(),
+                std::result::Result::Err(Some(T::into_value(v)?)),
+            )?)),
         }
     }
 }
@@ -1228,7 +1300,8 @@ impl<U: ComponentType, V: ComponentType> ResultTypeValTwo<U, V> {
     fn ty() -> ResultType {
         /// Holds an instantiated copy of the type.
         static TY: OnceCell<ResultType> = OnceCell::new();
-        TY.get_or_init(|| ResultType::new(Some(U::ty()), Some(V::ty()))).clone()
+        TY.get_or_init(|| ResultType::new(Some(U::ty()), Some(V::ty())))
+            .clone()
     }
 }
 
@@ -1241,14 +1314,20 @@ impl<U: ComponentType, V: ComponentType> ComponentType for Result<U, V> {
         match &**require_matches!(value, Value::Result(x), x) {
             std::result::Result::Ok(Some(u)) => Ok(std::result::Result::Ok(U::from_value(u)?)),
             std::result::Result::Err(Some(v)) => Ok(std::result::Result::Err(V::from_value(v)?)),
-            _ => bail!("Incorrect result type.")
+            _ => bail!("Incorrect result type."),
         }
     }
 
     fn into_value(self) -> Result<Value> {
         match self {
-            std::result::Result::Ok(u) => Ok(Value::Result(ResultValue::new(ResultTypeValTwo::<U, V>::ty(), std::result::Result::Ok(Some(U::into_value(u)?)))?)),
-            std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(ResultTypeValTwo::<U, V>::ty(), std::result::Result::Err(Some(V::into_value(v)?)))?))
+            std::result::Result::Ok(u) => Ok(Value::Result(ResultValue::new(
+                ResultTypeValTwo::<U, V>::ty(),
+                std::result::Result::Ok(Some(U::into_value(u)?)),
+            )?)),
+            std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(
+                ResultTypeValTwo::<U, V>::ty(),
+                std::result::Result::Err(Some(V::into_value(v)?)),
+            )?)),
         }
     }
 }
@@ -1257,7 +1336,8 @@ impl<T: ComponentType> ComponentType for Vec<T> {
     fn ty() -> ValueType {
         /// Holds an instantiated copy of the type.
         static TY: OnceCell<ValueType> = OnceCell::new();
-        TY.get_or_init(|| ValueType::List(ListType::new(T::ty()))).clone()
+        TY.get_or_init(|| ValueType::List(ListType::new(T::ty())))
+            .clone()
     }
 
     fn from_value(value: &Value) -> Result<Self> {

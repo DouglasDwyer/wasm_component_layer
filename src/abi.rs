@@ -554,7 +554,7 @@ pub trait Bindgen {
 }
 
 /// Generates stack-based instructions for using the canonical ABI.
-/// 
+///
 /// This code was adapted from the `wit-parser` crate.
 pub struct Generator<'a, B: Bindgen> {
     /// The ABI variant to use.
@@ -929,7 +929,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.emit(&I32Const { val: discriminant })?;
         let mut pushed = 1;
         if let Some(ty) = cases
-            .into_iter().nth(discriminant as usize)
+            .into_iter()
+            .nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
             // Using the payload of this block we lower the type to
@@ -1169,10 +1170,10 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 .drain(self.stack.len() + 1 - params.len()..)
                 .collect::<Vec<_>>();
 
-            let has_value = if let Some(ty) =
-                cases
-                    .into_iter().nth(discriminant as usize)
-                    .ok_or_else(|| Error::msg("Invalid discriminant value."))?
+            let has_value = if let Some(ty) = cases
+                .into_iter()
+                .nth(discriminant as usize)
+                .ok_or_else(|| Error::msg("Invalid discriminant value."))?
             {
                 // Push only the values we need for this variant onto
                 // the stack.
@@ -1351,7 +1352,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         self.stack.push(addr.clone());
         self.store_intrepr(offset, tag)?;
         if let Some(ty) = cases
-            .into_iter().nth(discriminant as usize)
+            .into_iter()
+            .nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
             self.stack.push(payload_name);
@@ -1578,7 +1580,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         if let Instruction::ReadI32 { value } = variant {
             let disc = value.get();
             let has_value = if let Some(ty) = cases
-                .into_iter().nth(disc as usize)
+                .into_iter()
+                .nth(disc as usize)
                 .ok_or_else(|| Error::msg("Invalid discriminant value."))?
             {
                 self.read_from_memory(ty, addr, payload_offset)?;

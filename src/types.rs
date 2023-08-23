@@ -309,7 +309,7 @@ impl VariantCase {
     pub fn new(name: impl Into<Arc<str>>, ty: Option<ValueType>) -> Self {
         Self {
             name: name.into(),
-            ty
+            ty,
         }
     }
 
@@ -397,7 +397,7 @@ impl EnumType {
                 .map(|x| Into::<Arc<str>>::into(x))
                 .collect(),
         };
-        
+
         for i in 0..res.cases.len() {
             for j in 0..i {
                 ensure!(res.cases[i] != res.cases[j], "Duplicate case names.");
@@ -556,7 +556,7 @@ impl Hash for FlagsType {
 static RESOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Describes the type of a resource. This may either be:
-/// 
+///
 /// - An abstract guest resource, associated with a component. Abstract resources
 /// cannot be used to instantiate any values.
 /// - An instantiated guest resource, associated with an instance. Instantiated guest
@@ -576,22 +576,38 @@ impl ResourceType {
             kind: ResourceKindValue::Host {
                 resource_id: RESOURCE_ID_COUNTER.fetch_add(1, Ordering::AcqRel),
                 type_id: TypeId::of::<T>(),
-                associated_store: None
+                associated_store: None,
             },
         }
     }
-    
+
     /// Creates a new host resource for storing values of the given type. Additionally,
     /// adds a destructor that is called when the resource is dropped. Note that multiple
     /// resource types may be created for the same `T`, and they will be distinct.
-    pub fn with_destructor<T: 'static + Send + Sync + Sized, C: AsContextMut>(mut ctx: C, destructor: impl 'static + Send + Sync + Fn(StoreContextMut<'_, C::UserState, C::Engine>, T) -> Result<()>) -> Result<Self> {
+    pub fn with_destructor<T: 'static + Send + Sync + Sized, C: AsContextMut>(
+        mut ctx: C,
+        destructor: impl 'static
+            + Send
+            + Sync
+            + Fn(StoreContextMut<'_, C::UserState, C::Engine>, T) -> Result<()>,
+    ) -> Result<Self> {
         let store_id = ctx.as_context().inner.data().id;
         let destructor = wasm_runtime_layer::Func::new(
             ctx.as_context_mut().inner,
             wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []),
             move |mut ctx, val, _res| {
-                let resource = wasm_runtime_layer::AsContextMut::as_context_mut(&mut ctx).data_mut().host_resources.remove(require_matches!(val[0], wasm_runtime_layer::Value::I32(x), x) as usize);
-                destructor(StoreContextMut { inner: ctx }, *resource.downcast().expect("Resource was of incorrect type."))
+                let resource = wasm_runtime_layer::AsContextMut::as_context_mut(&mut ctx)
+                    .data_mut()
+                    .host_resources
+                    .remove(
+                        require_matches!(val[0], wasm_runtime_layer::Value::I32(x), x) as usize,
+                    );
+                destructor(
+                    StoreContextMut { inner: ctx },
+                    *resource
+                        .downcast()
+                        .expect("Resource was of incorrect type."),
+                )
             },
         );
 
@@ -599,17 +615,25 @@ impl ResourceType {
             kind: ResourceKindValue::Host {
                 resource_id: RESOURCE_ID_COUNTER.fetch_add(1, Ordering::AcqRel),
                 type_id: TypeId::of::<T>(),
-                associated_store: Some((store_id, destructor))
+                associated_store: Some((store_id, destructor)),
             },
         })
     }
 
     /// Determines whether this resource type can be used to extract host values of `T` from the provided store.
     pub(crate) fn valid_for<T: 'static + Send + Sync>(&self, store_id: u64) -> bool {
-        if let ResourceKindValue::Host { type_id, associated_store, .. } = &self.kind {
-            *type_id == TypeId::of::<T>() && associated_store.as_ref().map(|(id, _)| *id == store_id).unwrap_or(true)
-        }
-        else {
+        if let ResourceKindValue::Host {
+            type_id,
+            associated_store,
+            ..
+        } = &self.kind
+        {
+            *type_id == TypeId::of::<T>()
+                && associated_store
+                    .as_ref()
+                    .map(|(id, _)| *id == store_id)
+                    .unwrap_or(true)
+        } else {
             false
         }
     }
@@ -644,7 +668,10 @@ impl ResourceType {
 
     /// Determines whether this is a host resource, and if so, returns the optional destructor.
     pub(crate) fn host_destructor(&self) -> Option<Option<wasm_runtime_layer::Func>> {
-        if let ResourceKindValue::Host { associated_store, .. } = &self.kind {
+        if let ResourceKindValue::Host {
+            associated_store, ..
+        } = &self.kind
+        {
             Some(associated_store.as_ref().map(|(_, x)| x.clone()))
         } else {
             None
@@ -655,10 +682,7 @@ impl ResourceType {
     pub(crate) fn instantiate(&self, instance: u64) -> Result<Self> {
         if let ResourceKindValue::Abstract { id, component: _ } = &self.kind {
             Ok(Self {
-                kind: ResourceKindValue::Instantiated {
-                    id: *id,
-                    instance
-                },
+                kind: ResourceKindValue::Instantiated { id: *id, instance },
             })
         } else {
             bail!("Resource was not abstract.");
@@ -713,12 +737,8 @@ impl PartialEq for ResourceKindValue {
                 },
             ) => a == x && b == y,
             (
-                ResourceKindValue::Instantiated {
-                    id: a, instance: b
-                },
-                ResourceKindValue::Instantiated {
-                    id: x, instance: y
-                },
+                ResourceKindValue::Instantiated { id: a, instance: b },
+                ResourceKindValue::Instantiated { id: x, instance: y },
             ) => a == x && b == y,
             (
                 ResourceKindValue::Host { resource_id: a, .. },
@@ -739,17 +759,11 @@ impl Hash for ResourceKindValue {
                 id.hash(state);
                 component.hash(state);
             }
-            ResourceKindValue::Instantiated {
-                id,
-                instance
-            } => {
+            ResourceKindValue::Instantiated { id, instance } => {
                 id.hash(state);
                 instance.hash(state);
             }
-            ResourceKindValue::Host {
-                resource_id,
-                ..
-            } => resource_id.hash(state),
+            ResourceKindValue::Host { resource_id, .. } => resource_id.hash(state),
         }
     }
 }
@@ -882,7 +896,7 @@ pub trait ComponentList: Sized {
     /// Attempts to convert this component list into values, storing them
     /// in the provided slice.
     fn into_values(self, values: &mut [crate::values::Value]) -> Result<()>;
-    
+
     /// Attempts to convert a list of values into a component list of this type.
     fn from_values(values: &[crate::values::Value]) -> Result<Self>;
 }
@@ -904,7 +918,9 @@ impl ComponentList for () {
 /// A function that returns a single result, and eats a macro parameter in the process.
 /// Used to count the number of parameters in the macro.
 #[allow(clippy::extra_unused_type_parameters)]
-const fn one<T>() -> usize { 1 }
+const fn one<T>() -> usize {
+    1
+}
 
 /// Implements the component list for a tuple with the provided set of parameters.
 macro_rules! impl_component_list {
