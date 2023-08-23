@@ -40,8 +40,8 @@ pub(crate) struct GuestFunc {
     pub realloc: Option<wasm_runtime_layer::Func>,
     /// The post-return function to use.
     pub post_return: Option<wasm_runtime_layer::Func>,
-    /// The resource tables to use.
-    pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    /// The state table to use.
+    pub state_table: Arc<StateTable>,
     /// The types to use.
     pub types: Arc<[crate::types::ValueType]>,
     /// The instance ID to use.
@@ -110,11 +110,13 @@ impl Func {
                     function,
                     memory,
                     realloc,
-                    resource_tables,
+                    state_table,
                     post_return,
                     types,
                     instance_id,
                 } = &**x;
+
+                ensure!(!state_table.dropped.load(Ordering::Acquire), "Instance had been dropped.");
 
                 let mut bindgen = FuncBindgen {
                     ctx,
@@ -127,7 +129,7 @@ impl Func {
                     encoding,
                     memory,
                     realloc,
-                    resource_tables,
+                    resource_tables: &state_table.resource_tables,
                     post_return,
                     types,
                     handles_to_drop: Vec::new(),
@@ -164,11 +166,15 @@ impl Func {
         R::into_tys(&mut params_results[P::LEN..]);
         ensure!(
             &params_results[..P::LEN] == self.ty.params(),
-            "Parameters did not match function signature."
+            "Parameters did not match function signature. Expected {:?} but got {:?}",
+            self.ty.params(),
+            &params_results[..P::LEN]
         );
         ensure!(
             &params_results[P::LEN..] == self.ty.results(),
-            "Results did not match function signature."
+            "Results did not match function signature. Expected {:?} but got {:?}",
+            self.ty.results(),
+            &params_results[P::LEN..]
         );
         Ok(TypedFunc {
             inner: self.clone(),
@@ -206,7 +212,7 @@ impl Func {
             encoding: &options.encoding,
             memory: &options.memory,
             realloc: &options.realloc,
-            resource_tables: &options.resource_tables,
+            resource_tables: &options.state_table.resource_tables,
             post_return: &options.post_return,
             types: &options.types,
             handles_to_drop: Vec::new(),
@@ -246,7 +252,7 @@ pub(crate) struct GuestInvokeOptions {
     /// The post-return function to use.
     pub post_return: Option<wasm_runtime_layer::Func>,
     /// The resource tables to use.
-    pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    pub state_table: Arc<StateTable>,
     /// The types to use.
     pub types: Arc<[crate::types::ValueType]>,
     /// The instance ID to use.

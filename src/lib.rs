@@ -1045,22 +1045,23 @@ impl Instance {
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(id, component, linker)?;
         let types = Self::generate_types(component, &map)?;
-        let resource_tables = Arc::new(Mutex::new(vec![
+        let resource_tables = Mutex::new(vec![
             HandleTable::default();
             component
                 .0
                 .translation
                 .component
                 .num_resource_tables
-        ]));
+        ]);
         let instance = InstanceInner {
             component: component.clone(),
             exports: Exports::new(),
             id,
             instances: Default::default(),
             instance_flags,
-            resource_tables,
+            state_table: Arc::new(StateTable { dropped: AtomicBool::new(false), resource_tables }),
             types,
+            store_id: ctx.as_context().inner.data().id
         };
         let initialized = Self::global_initialize(instance, &mut ctx, linker, &map)?;
         let exported = Self::load_exports(initialized, &ctx, &map)?;
@@ -1075,6 +1076,29 @@ impl Instance {
     /// Gets the exports of this instance.
     pub fn exports(&self) -> &Exports {
         &self.0.exports
+    }
+
+    /// Drops the instance and all of its owned resources, removing its data from the given store.
+    /// Returns the list of errors that occurred while dropping owned resources, but continues
+    /// until all resources have been dropped.
+    pub fn drop<T, E: backend::WasmEngine>(&self, ctx: &mut Store<T, E>) -> Result<Vec<Error>> {
+        ensure!(self.0.store_id == ctx.inner.data().id, "Incorrect store.");
+        self.0.state_table.dropped.store(true, Ordering::Release);
+
+        let mut errors = Vec::new();
+
+        let mut tables = self.0.state_table.resource_tables.try_lock().expect("Could not lock resource tables.");
+        for table in &mut *tables {
+            if let Some(destructor) = table.destructor.as_ref() {
+                for val in table.array.iter().flatten() {
+                    if let Err(x) = destructor.call(&mut ctx.inner, &[wasm_runtime_layer::Value::I32(val.rep)], &mut []) {
+                        errors.push(x);
+                    }
+                }
+            }
+        }
+
+        Ok(errors)
     }
 
     /// Generates the concrete list of types for this instance, after replacing abstract resources with instantiated ones.
@@ -1230,7 +1254,7 @@ impl Instance {
             function: func.clone(),
             memory,
             realloc,
-            resource_tables: inner.resource_tables.clone(),
+            state_table: inner.state_table.clone(),
             post_return,
             types: inner.types.clone(),
             instance_id: inner.id,
@@ -1280,7 +1304,7 @@ impl Instance {
                 function: func.clone(),
                 memory,
                 realloc,
-                resource_tables: inner.resource_tables.clone(),
+                state_table: inner.state_table.clone(),
                 post_return,
                 types: inner.types.clone(),
                 instance_id: inner.id,
@@ -1346,7 +1370,7 @@ impl Instance {
                     }
                     GeneratedTrampoline::ResourceNew(x) => {
                         let x = x.as_u32();
-                        let tables = inner.resource_tables.clone();
+                        let tables = inner.state_table.clone();
                         Ok(Extern::Func(Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1354,6 +1378,7 @@ impl Instance {
                                 let rep =
                                     require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
                                 let mut table_array = tables
+                                    .resource_tables
                                     .try_lock()
                                     .expect("Could not get mutual reference to table.");
                                 results[0] = wasm_runtime_layer::Value::I32(
@@ -1369,7 +1394,7 @@ impl Instance {
                     }
                     GeneratedTrampoline::ResourceRep(x) => {
                         let x = x.as_u32();
-                        let tables = inner.resource_tables.clone();
+                        let tables = inner.state_table.clone();
                         Ok(Extern::Func(Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1377,6 +1402,7 @@ impl Instance {
                                 let idx =
                                     require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
                                 let table_array = tables
+                                    .resource_tables
                                     .try_lock()
                                     .expect("Could not get mutual reference to table.");
                                 results[0] = wasm_runtime_layer::Value::I32(
@@ -1389,7 +1415,7 @@ impl Instance {
                     GeneratedTrampoline::ResourceDrop(y, _) => {
                         destructors.push(*x);
                         let x = y.as_u32();
-                        let tables = inner.resource_tables.clone();
+                        let tables = inner.state_table.clone();
                         Ok(Extern::Func(Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1397,6 +1423,7 @@ impl Instance {
                                 let idx =
                                     require_matches!(args[0], wasm_runtime_layer::Value::I32(x), x);
                                 let mut table_array = tables
+                                    .resource_tables
                                     .try_lock()
                                     .expect("Could not get mutual reference to table.");
                                 let current_table = &mut table_array[x as usize];
@@ -1559,6 +1586,7 @@ impl Instance {
         resource_map: &FxHashMap<ResourceType, ResourceType>,
     ) -> Result<InstanceInner> {
         let mut tables = inner
+            .state_table
             .resource_tables
             .try_lock()
             .expect("Could not get access to resource tables.");
@@ -1686,10 +1714,21 @@ struct InstanceInner {
     pub instance_flags: wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>,
     /// The underlying instantiated WASM modules for this instance.
     pub instances: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, wasm_runtime_layer::Instance>,
-    /// The set of resource tables and destructors.
-    pub resource_tables: Arc<Mutex<Vec<HandleTable>>>,
+    /// Stores the instance-specific state.
+    pub state_table: Arc<StateTable>,
     /// The list of types for this instance.
     pub types: Arc<[crate::types::ValueType]>,
+    /// The store ID associated with this instance.
+    pub store_id: u64
+}
+
+/// Stores the instance-specific state for a component.
+#[derive(Debug)]
+struct StateTable {
+    /// Whether this instance has been dropped.
+    pub dropped: AtomicBool,
+    /// The set of resource tables and destructors.
+    pub resource_tables: Mutex<Vec<HandleTable>>
 }
 
 /// Details an import for a component.
@@ -2038,113 +2077,5 @@ impl HandleTable {
             .context("Invalid handle index.")?;
         self.free.push(i);
         Ok(res)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(warnings)]
-
-    use super::*;
-
-    struct ScreamOnDrop;
-    
-    impl Drop for ScreamOnDrop {
-        fn drop(&mut self) {
-            println!("aaaaaaaaaAAAAAAAAAAAAAAAAAAAA");
-        }
-    }
-
-    #[test]
-    fn test_imports() {
-        const WASM_0: &[u8] = include_bytes!("test_guest_component.wasm");
-        const WASM: &[u8] = include_bytes!("test_guest_component2.wasm");
-
-        let engine = Engine::new(wasmi::Engine::default());
-        let mut store = Store::new(&engine, ());
-        let comp_0 = crate::Component::new(&engine, WASM_0).unwrap();
-        let comp = crate::Component::new(&engine, WASM).unwrap();
-
-        let f_func = TypedFunc::new(&mut store, |_ctx, ()| Ok(("aa".to_owned(),)));
-        println!("Calling got {}", f_func.call(&mut store, ()).unwrap().0);
-
-        let mut linker = Linker::default();
-
-        let inst_0 = linker.instantiate(&mut store, &comp_0).unwrap();
-
-        let _real_inst = inst_0
-            .exports()
-            .instance(&"test:guest/tester".try_into().unwrap())
-            .unwrap();
-
-        let link_int = linker
-            .define_instance("test:guest/tester".try_into().unwrap())
-            .unwrap();
-        //link_int.define_resource("exp", real_inst.resource("exp").unwrap()).unwrap();
-
-        //link_int.define_func("[constructor]exp", real_inst.func("[constructor]exp").unwrap()).unwrap();
-        //link_int.define_func("[method]exp.test", real_inst.func("[method]exp.test").unwrap()).unwrap();
-
-        let my_resource = ResourceType::new::<ScreamOnDrop>(); // ResourceType::with_destructor(&mut store, |_, x: String| { println!("im ded an gone {x}"); Ok(()) }).unwrap();
-        let cpy = my_resource.clone();
-        link_int.define_resource("exp", my_resource.clone());
-
-        link_int
-            .define_func(
-                "[constructor]exp",
-                crate::func::Func::new(
-                    &mut store,
-                    crate::types::FuncType::new(
-                        [],
-                        [crate::types::ValueType::Own(my_resource.clone())],
-                    ),
-                    move |ctx, _, res| {
-                        res[0] = crate::values::Value::Own(
-                            crate::values::ResourceOwn::new(ctx, ScreamOnDrop, cpy.clone()).unwrap(),
-                        );
-                        Ok(())
-                    },
-                ),
-            )
-            .unwrap();
-        link_int
-            .define_func(
-                "[method]exp.test",
-                crate::func::Func::new(
-                    &mut store,
-                    crate::types::FuncType::new(
-                        [crate::types::ValueType::Borrow(my_resource.clone())],
-                        [crate::types::ValueType::String],
-                    ),
-                    |_, _, res| {
-                        res[0] = crate::values::Value::String("yay".into());
-                        Ok(())
-                    },
-                ),
-            )
-            .unwrap();
-
-        let inst_1 = linker.instantiate(&mut store, &comp).unwrap();
-
-        let func = inst_1
-            .exports()
-            .instance(&"test-two:guest/bester".try_into().unwrap())
-            .unwrap()
-            .func("the-string")
-            .unwrap();
-        let mut res = [crate::values::Value::Bool(false)];
-        func.call(&mut store, &[], &mut res).unwrap();
-        println!("OMG WE GOT {res:?}");
-        //println!("COmp 0 had version {:?} and comp wanted {:?}", comp_0.exports().instances().map(|(a, _)| a).collect::<Vec<_>>(), comp.imports().instances().map(|(a, _)| a).collect::<Vec<_>>());
-        /*let func_ty = comp.imports().instance(&"test:guest/tester@0.1.1".try_into().unwrap()).unwrap().func("get-a-string").unwrap();
-
-        linker.define_instance("test:guest/tester@0.1.1".try_into().unwrap()).unwrap().define_func("get-a-string", inst_0.exports().instance(&"test:guest/tester@0.1.1".try_into().unwrap()).unwrap().func("get-a-string").unwrap()).unwrap();
-
-        let inst = linker.instantiate(&mut store, &comp).unwrap();
-        let double = inst.exports().root().func("doubled-string").unwrap();
-
-        let mut res = [crate::values::Value::Bool(false)];
-        double.call(&mut store, &[], &mut res).unwrap();
-        println!("AND HIS NAMES {res:?}");*/
     }
 }

@@ -1,0 +1,9 @@
+package test:guest
+
+interface foo {
+    select-nth: func(x: list<string>, n: u32) -> string
+}
+
+world guest {
+    export foo
+}
