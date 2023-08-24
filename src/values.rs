@@ -6,7 +6,6 @@ use std::sync::atomic::*;
 use std::sync::*;
 
 use anyhow::*;
-use once_cell::sync::*;
 use private::*;
 
 use crate::require_matches::require_matches;
@@ -1157,21 +1156,9 @@ impl ComponentType for Arc<str> {
     }
 }
 
-/// Holds an instantiated copy of the type.
-struct OptionTypeVal<T: ComponentType>(T);
-
-impl<T: ComponentType> OptionTypeVal<T> {
-    /// Gets an instantiated copy of the type.
-    fn ty() -> OptionType {
-        /// Holds an instantiated copy of the type.
-        static TY: OnceCell<OptionType> = OnceCell::new();
-        TY.get_or_init(|| OptionType::new(T::ty())).clone()
-    }
-}
-
 impl<T: ComponentType> ComponentType for Option<T> {
     fn ty() -> ValueType {
-        ValueType::Option(OptionTypeVal::<T>::ty())
+        ValueType::Option(OptionType::new(T::ty()))
     }
 
     fn from_value(value: &Value) -> Result<Self> {
@@ -1186,12 +1173,12 @@ impl<T: ComponentType> ComponentType for Option<T> {
     fn into_value(self) -> Result<Value> {
         if let Some(val) = self {
             Ok(Value::Option(OptionValue::new(
-                OptionTypeVal::<T>::ty(),
+                OptionType::new(T::ty()),
                 Some(T::into_value(val)?),
             )?))
         } else {
             Ok(Value::Option(OptionValue::new(
-                OptionTypeVal::<T>::ty(),
+                OptionType::new(T::ty()),
                 None,
             )?))
         }
@@ -1212,22 +1199,9 @@ impl<T: ComponentType> ComponentType for Box<T> {
     }
 }
 
-/// Holds an instantiated copy of the type.
-struct ResultTypeValOk<T: ComponentType>(T);
-
-impl<T: ComponentType> ResultTypeValOk<T> {
-    /// Gets an instantiated copy of the type.
-    fn ty() -> ResultType {
-        /// Holds an instantiated copy of the type.
-        static TY: OnceCell<ResultType> = OnceCell::new();
-        TY.get_or_init(|| ResultType::new(Some(T::ty()), None))
-            .clone()
-    }
-}
-
 impl<T: ComponentType> ComponentType for Result<T, ()> {
     fn ty() -> ValueType {
-        ValueType::Result(ResultTypeValOk::<T>::ty())
+        ValueType::Result(ResultType::new(Some(T::ty()), None))
     }
 
     fn from_value(value: &Value) -> Result<Self> {
@@ -1241,33 +1215,20 @@ impl<T: ComponentType> ComponentType for Result<T, ()> {
     fn into_value(self) -> Result<Value> {
         match self {
             std::result::Result::Ok(x) => Ok(Value::Result(ResultValue::new(
-                ResultTypeValOk::<T>::ty(),
+                ResultType::new(Some(T::ty()), None),
                 std::result::Result::Ok(Some(T::into_value(x)?)),
             )?)),
             std::result::Result::Err(()) => Ok(Value::Result(ResultValue::new(
-                ResultTypeValOk::<T>::ty(),
+                ResultType::new(Some(T::ty()), None),
                 std::result::Result::Err(None),
             )?)),
         }
     }
 }
 
-/// Holds an instantiated copy of the type.
-struct ResultTypeValErr<T: ComponentType>(T);
-
-impl<T: ComponentType> ResultTypeValErr<T> {
-    /// Gets an instantiated copy of the type.
-    fn ty() -> ResultType {
-        /// Holds an instantiated copy of the type.
-        static TY: OnceCell<ResultType> = OnceCell::new();
-        TY.get_or_init(|| ResultType::new(None, Some(T::ty())))
-            .clone()
-    }
-}
-
 impl<T: ComponentType> ComponentType for Result<(), T> {
     fn ty() -> ValueType {
-        ValueType::Result(ResultTypeValErr::<T>::ty())
+        ValueType::Result(ResultType::new(None, Some(T::ty())))
     }
 
     fn from_value(value: &Value) -> Result<Self> {
@@ -1281,33 +1242,20 @@ impl<T: ComponentType> ComponentType for Result<(), T> {
     fn into_value(self) -> Result<Value> {
         match self {
             std::result::Result::Ok(()) => Ok(Value::Result(ResultValue::new(
-                ResultTypeValErr::<T>::ty(),
+                ResultType::new(None, Some(T::ty())),
                 std::result::Result::Ok(None),
             )?)),
             std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(
-                ResultTypeValErr::<T>::ty(),
+                ResultType::new(None, Some(T::ty())),
                 std::result::Result::Err(Some(T::into_value(v)?)),
             )?)),
         }
     }
 }
 
-/// Holds an instantiated copy of the type.
-struct ResultTypeValTwo<U: ComponentType, V: ComponentType>(U, V);
-
-impl<U: ComponentType, V: ComponentType> ResultTypeValTwo<U, V> {
-    /// Gets an instantiated copy of the type.
-    fn ty() -> ResultType {
-        /// Holds an instantiated copy of the type.
-        static TY: OnceCell<ResultType> = OnceCell::new();
-        TY.get_or_init(|| ResultType::new(Some(U::ty()), Some(V::ty())))
-            .clone()
-    }
-}
-
 impl<U: ComponentType, V: ComponentType> ComponentType for Result<U, V> {
     fn ty() -> ValueType {
-        ValueType::Result(ResultTypeValTwo::<U, V>::ty())
+        ValueType::Result(ResultType::new(Some(U::ty()), Some(V::ty())))
     }
 
     fn from_value(value: &Value) -> Result<Self> {
@@ -1321,11 +1269,11 @@ impl<U: ComponentType, V: ComponentType> ComponentType for Result<U, V> {
     fn into_value(self) -> Result<Value> {
         match self {
             std::result::Result::Ok(u) => Ok(Value::Result(ResultValue::new(
-                ResultTypeValTwo::<U, V>::ty(),
+                ResultType::new(Some(U::ty()), Some(V::ty())),
                 std::result::Result::Ok(Some(U::into_value(u)?)),
             )?)),
             std::result::Result::Err(v) => Ok(Value::Result(ResultValue::new(
-                ResultTypeValTwo::<U, V>::ty(),
+                ResultType::new(Some(U::ty()), Some(V::ty())),
                 std::result::Result::Err(Some(V::into_value(v)?)),
             )?)),
         }
@@ -1334,10 +1282,7 @@ impl<U: ComponentType, V: ComponentType> ComponentType for Result<U, V> {
 
 impl<T: ComponentType> ComponentType for Vec<T> {
     fn ty() -> ValueType {
-        /// Holds an instantiated copy of the type.
-        static TY: OnceCell<ValueType> = OnceCell::new();
-        TY.get_or_init(|| ValueType::List(ListType::new(T::ty())))
-            .clone()
+        ValueType::List(ListType::new(T::ty()))
     }
 
     fn from_value(value: &Value) -> Result<Self> {
