@@ -79,6 +79,7 @@ pub fn main() {
 
 The following features have yet to be implemented:
 
+- String transcoders
 - A macro for generating host bindings
 - More comprehensive tests
 - Subtyping
