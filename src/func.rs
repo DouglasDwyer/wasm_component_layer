@@ -46,7 +46,7 @@ pub(crate) struct GuestFunc {
     /// The instance ID to use.
     pub instance_id: u64,
     /// The ID of the interface associated with this function.
-    pub interface_id: Option<InterfaceIdentifier>
+    pub interface_id: Option<InterfaceIdentifier>,
 }
 
 /// A component model function that may be invoked to interact with an `Instance`.
@@ -115,7 +115,7 @@ impl Func {
                     post_return,
                     types,
                     instance_id,
-                    interface_id
+                    interface_id,
                 } = &**x;
 
                 ensure!(
@@ -149,7 +149,13 @@ impl Func {
                     LiftLower::LowerArgsLiftResults,
                     &mut bindgen,
                 )
-                .call(function).map_err(|error| FuncError { name: function.name.clone(), interface: interface_id.clone(), instance: i.as_ref().expect("No instance available.").clone(), error })?)
+                .call(function)
+                .map_err(|error| FuncError {
+                    name: function.name.clone(),
+                    interface: interface_id.clone(),
+                    instance: i.as_ref().expect("No instance available.").clone(),
+                    error,
+                })?)
             }
             FuncImpl::HostFunc(idx) => {
                 let callee = ctx.as_context().inner.data().host_functions.get(idx);
@@ -190,9 +196,12 @@ impl Func {
     /// Ties the given instance to this function.
     pub(crate) fn instantiate(&self, inst: crate::Instance) -> Self {
         if let FuncImpl::GuestFunc(None, y) = &self.backing {
-            Self { store_id: self.store_id, backing: FuncImpl::GuestFunc(Some(inst), y.clone()), ty: self.ty.clone() }
-        }
-        else {
+            Self {
+                store_id: self.store_id,
+                backing: FuncImpl::GuestFunc(Some(inst), y.clone()),
+                ty: self.ty.clone(),
+            }
+        } else {
             panic!("Function was not an uninitialized guest function.");
         }
     }
@@ -1301,7 +1310,7 @@ pub struct FuncError {
     /// The instance.
     instance: crate::Instance,
     /// The error.
-    error: Error
+    error: Error,
 }
 
 impl FuncError {
@@ -1320,8 +1329,7 @@ impl std::fmt::Debug for FuncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(inter) = &self.interface {
             f.write_fmt(format_args!("in {}.{}: {:?}", inter, self.name, self.error))
-        }
-        else {
+        } else {
             f.write_fmt(format_args!("in {}: {:?}", self.name, self.error))
         }
     }
@@ -1331,8 +1339,7 @@ impl std::fmt::Display for FuncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(inter) = &self.interface {
             f.write_fmt(format_args!("in {}.{}: {}", inter, self.name, self.error))
-        }
-        else {
+        } else {
             f.write_fmt(format_args!("in {}: {}", self.name, self.error))
         }
     }

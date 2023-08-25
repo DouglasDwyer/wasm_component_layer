@@ -1142,7 +1142,9 @@ impl Instance {
         let initialized = Self::global_initialize(instance, &mut ctx, linker, &map)?;
         let exported = Self::load_exports(initialized, &ctx, &map)?;
 
-        Ok(Self(Arc::new_cyclic(|w| Self::fill_exports(exported, w.clone()))))
+        Ok(Self(Arc::new_cyclic(|w| {
+            Self::fill_exports(exported, w.clone())
+        })))
     }
 
     /// Gets the component associated with this instance.
@@ -1274,7 +1276,15 @@ impl Instance {
         for (name, func) in &inner.component.0.export_info.root.functions {
             inner.exports.root.functions.insert(
                 name.clone(),
-                Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map, None)?,
+                Self::export_function(
+                    &inner,
+                    &ctx,
+                    &func.def,
+                    &func.options,
+                    &func.func,
+                    map,
+                    None,
+                )?,
             );
         }
         for (name, res) in &inner.component.0.export_types.root.resources {
@@ -1288,8 +1298,15 @@ impl Instance {
         let mut generated_functions = Vec::new();
         for (inst_name, inst) in &inner.component.0.export_info.instances {
             for (name, func) in &inst.functions {
-                let export =
-                    Self::export_function(&inner, &ctx, &func.def, &func.options, &func.func, map, Some(inst_name.clone()))?;
+                let export = Self::export_function(
+                    &inner,
+                    &ctx,
+                    &func.def,
+                    &func.options,
+                    &func.func,
+                    map,
+                    Some(inst_name.clone()),
+                )?;
                 generated_functions.push((inst_name.clone(), name.clone(), export));
             }
         }
@@ -1366,7 +1383,7 @@ impl Instance {
         options: &CanonicalOptions,
         func: &Function,
         mapping: &FxHashMap<ResourceType, ResourceType>,
-        interface_id: Option<InterfaceIdentifier>
+        interface_id: Option<InterfaceIdentifier>,
     ) -> Result<crate::func::Func> {
         let callee = Self::core_export(inner, &ctx, def)
             .expect("Could not get callee export.")
@@ -1394,19 +1411,22 @@ impl Instance {
         Ok(crate::func::Func {
             store_id: ctx.as_context().inner.data().id,
             ty: crate::types::FuncType::from_component(func, &inner.component.0, Some(mapping))?,
-            backing: FuncImpl::GuestFunc(None, Arc::new(GuestFunc {
-                callee,
-                component: inner.component.0.clone(),
-                encoding: options.string_encoding,
-                function: func.clone(),
-                memory,
-                realloc,
-                state_table: inner.state_table.clone(),
-                post_return,
-                types: inner.types.clone(),
-                instance_id: inner.id,
-                interface_id
-            })),
+            backing: FuncImpl::GuestFunc(
+                None,
+                Arc::new(GuestFunc {
+                    callee,
+                    component: inner.component.0.clone(),
+                    encoding: options.string_encoding,
+                    function: func.clone(),
+                    memory,
+                    realloc,
+                    state_table: inner.state_table.clone(),
+                    post_return,
+                    types: inner.types.clone(),
+                    instance_id: inner.id,
+                    interface_id,
+                }),
+            ),
         })
     }
 
@@ -1730,7 +1750,7 @@ pub struct Exports {
     /// The root interface of this instance.
     root: ExportInstance,
     /// All of this instance's exported interfaces.
-    instances: FxHashMap<InterfaceIdentifier, ExportInstance>
+    instances: FxHashMap<InterfaceIdentifier, ExportInstance>,
 }
 
 impl Exports {
@@ -1738,7 +1758,7 @@ impl Exports {
     pub(crate) fn new() -> Self {
         Self {
             root: ExportInstance::new(),
-            instances: FxHashMap::default()
+            instances: FxHashMap::default(),
         }
     }
 
@@ -1769,7 +1789,7 @@ pub struct ExportInstance {
     /// The resources of the interface.
     resources: FxHashMap<Arc<str>, ResourceType>,
     /// The instance that owns these exports.
-    instance: Weak<InstanceInner>
+    instance: Weak<InstanceInner>,
 }
 
 impl ExportInstance {
@@ -1778,19 +1798,25 @@ impl ExportInstance {
         Self {
             functions: FxHashMap::default(),
             resources: FxHashMap::default(),
-            instance: Weak::new()
+            instance: Weak::new(),
         }
     }
 
     /// Gets the associated function by name, if any.
     pub fn func(&self, name: impl AsRef<str>) -> Option<crate::func::Func> {
-        self.functions.get(name.as_ref()).map(|x| x.instantiate(Instance(self.instance.upgrade().expect("Instance did not exist."))))
+        self.functions.get(name.as_ref()).map(|x| {
+            x.instantiate(Instance(
+                self.instance.upgrade().expect("Instance did not exist."),
+            ))
+        })
     }
 
     /// Iterates over all associated functions by name.
     pub fn funcs(&self) -> impl Iterator<Item = (&'_ str, crate::func::Func)> {
         let inst = self.instance.upgrade().expect("Instance did not exist.");
-        self.functions.iter().map(move |(k, v)| (&**k, v.instantiate(Instance(inst.clone()))))
+        self.functions
+            .iter()
+            .map(move |(k, v)| (&**k, v.instantiate(Instance(inst.clone()))))
     }
 
     /// Gets the associated abstract resource by name, if any.
