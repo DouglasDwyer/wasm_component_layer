@@ -17,7 +17,7 @@ use crate::{AsContext, AsContextMut, StoreContextMut, *};
 #[derive(Clone, Debug)]
 pub(crate) enum FuncImpl {
     /// A function backed by a guest implementation.
-    GuestFunc(Arc<GuestFunc>),
+    GuestFunc(Option<crate::Instance>, Arc<GuestFunc>),
     /// A host-provided function.
     HostFunc(Arc<AtomicUsize>),
 }
@@ -45,6 +45,8 @@ pub(crate) struct GuestFunc {
     pub types: Arc<[crate::types::ValueType]>,
     /// The instance ID to use.
     pub instance_id: u64,
+    /// The ID of the interface associated with this function.
+    pub interface_id: Option<InterfaceIdentifier>
 }
 
 /// A component model function that may be invoked to interact with an `Instance`.
@@ -101,7 +103,7 @@ impl Func {
         }
 
         match &self.backing {
-            FuncImpl::GuestFunc(x) => {
+            FuncImpl::GuestFunc(i, x) => {
                 let GuestFunc {
                     callee,
                     component,
@@ -113,6 +115,7 @@ impl Func {
                     post_return,
                     types,
                     instance_id,
+                    interface_id
                 } = &**x;
 
                 ensure!(
@@ -140,13 +143,13 @@ impl Func {
                     store_id: self.store_id,
                 };
 
-                Generator::new(
+                Ok(Generator::new(
                     &component.resolve,
                     AbiVariant::GuestExport,
                     LiftLower::LowerArgsLiftResults,
                     &mut bindgen,
                 )
-                .call(function)
+                .call(function).map_err(|error| FuncError { name: function.name.clone(), interface: interface_id.clone(), instance: i.as_ref().expect("No instance available.").clone(), error })?)
             }
             FuncImpl::HostFunc(idx) => {
                 let callee = ctx.as_context().inner.data().host_functions.get(idx);
@@ -182,6 +185,16 @@ impl Func {
             inner: self.clone(),
             data: PhantomData,
         })
+    }
+
+    /// Ties the given instance to this function.
+    pub(crate) fn instantiate(&self, inst: crate::Instance) -> Self {
+        if let FuncImpl::GuestFunc(None, y) = &self.backing {
+            Self { store_id: self.store_id, backing: FuncImpl::GuestFunc(Some(inst), y.clone()), ty: self.ty.clone() }
+        }
+        else {
+            panic!("Function was not an uninitialized guest function.");
+        }
     }
 
     /// Calls this function from a guest context.
@@ -1276,6 +1289,58 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
     /// Gets the component model type of this function.
     pub fn ty(&self) -> FuncType {
         self.inner.ty.clone()
+    }
+}
+
+/// Details the function name and instance in which an error occurred.
+pub struct FuncError {
+    /// The name of the function.
+    name: String,
+    /// The ID of the interface associated with the function.
+    interface: Option<InterfaceIdentifier>,
+    /// The instance.
+    instance: crate::Instance,
+    /// The error.
+    error: Error
+}
+
+impl FuncError {
+    /// Gets the name of the function for which the error was thrown.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Gets the instance for which this error occurred.
+    pub fn instance(&self) -> &crate::Instance {
+        &self.instance
+    }
+}
+
+impl std::fmt::Debug for FuncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(inter) = &self.interface {
+            f.write_fmt(format_args!("in {}.{}: {:?}", inter, self.name, self.error))
+        }
+        else {
+            f.write_fmt(format_args!("in {}: {:?}", self.name, self.error))
+        }
+    }
+}
+
+impl std::fmt::Display for FuncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(inter) = &self.interface {
+            f.write_fmt(format_args!("in {}.{}: {}", inter, self.name, self.error))
+        }
+        else {
+            f.write_fmt(format_args!("in {}: {}", self.name, self.error))
+        }
+    }
+}
+
+impl std::error::Error for FuncError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.error.as_ref())
     }
 }
 

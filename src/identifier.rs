@@ -84,6 +84,12 @@ impl TryFrom<&str> for PackageIdentifier {
 
 impl std::fmt::Debug for PackageIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for PackageIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(version) = self.version() {
             f.write_fmt(format_args!(
                 "{}:{}@{}",
@@ -165,6 +171,12 @@ impl TryFrom<&str> for InterfaceIdentifier {
 }
 
 impl std::fmt::Debug for InterfaceIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for InterfaceIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(version) = self.package.version() {
             f.write_fmt(format_args!(
