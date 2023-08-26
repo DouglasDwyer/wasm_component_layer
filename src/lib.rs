@@ -117,6 +117,7 @@ use wit_parser::*;
 
 pub use crate::func::*;
 pub use crate::identifier::*;
+pub use crate::identifier::PackageName;
 use crate::require_matches::*;
 pub use crate::types::*;
 pub use crate::values::*;

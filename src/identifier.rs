@@ -5,36 +5,88 @@ use wit_parser::*;
 
 /// Uniquely identifies a WASM package within a registry.
 #[derive(Clone, Hash, PartialEq, Eq)]
-pub struct PackageIdentifier {
+pub struct PackageName {
     /// The namespace of the package.
     namespace: Arc<str>,
     /// The name of the package.
     name: Arc<str>,
+}
+
+impl PackageName {
+    /// Creates a new package identifier for the given namespace and name.
+    pub fn new(
+        namespace: impl Into<Arc<str>>,
+        name: impl Into<Arc<str>>
+    ) -> Self {
+        Self {
+            name: name.into(),
+            namespace: namespace.into()
+        }
+    }
+
+    /// The name of the package.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The namespace of the package.
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+}
+
+impl TryFrom<&str> for PackageName {
+    type Error = Error;
+
+    fn try_from(id: &str) -> Result<Self> {
+        let colon = id
+            .find(':')
+            .ok_or_else(|| Error::msg(format!("Expected ':' in identifier {id}")))?;
+        let colon_next = colon + 1;
+        let namespace = &id[0..colon];
+        validate_id(namespace)?;
+        let name = &id[colon_next..];
+        validate_id(name)?;
+
+        Ok(Self::new(namespace, name))
+    }
+}
+
+impl std::fmt::Debug for PackageName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for PackageName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}:{}", self.namespace(), self.name()))
+    }
+}
+
+/// Uniquely identifies a WASM package within a registry, with an optionally-associated version.
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct PackageIdentifier {
+    /// The name of the package.
+    name: PackageName,
     /// The version of the package.
     version: Option<semver::Version>,
 }
 
 impl PackageIdentifier {
-    /// Creates a new package identifier for the given name, namespace, and version.
+    /// Creates a new package identifier for the given namespace, name, and version.
     pub fn new(
-        namespace: impl Into<Arc<str>>,
-        name: impl Into<Arc<str>>,
+        name: PackageName,
         version: Option<semver::Version>,
     ) -> Self {
         Self {
-            namespace: namespace.into(),
-            name: name.into(),
+            name,
             version,
         }
     }
 
-    /// Gets the namespace of the package.
-    pub fn namespace(&self) -> &str {
-        &self.namespace
-    }
-
     /// Gets the name of the package.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &PackageName {
         &self.name
     }
 
@@ -44,11 +96,10 @@ impl PackageIdentifier {
     }
 }
 
-impl From<&PackageName> for PackageIdentifier {
-    fn from(value: &PackageName) -> Self {
+impl From<&wit_parser::PackageName> for PackageIdentifier {
+    fn from(value: &wit_parser::PackageName) -> Self {
         Self {
-            namespace: value.namespace.as_str().into(),
-            name: value.name.as_str().into(),
+            name: PackageName::new(value.namespace.as_str(), value.name.as_str()),
             version: value.version.clone(),
         }
     }
@@ -75,8 +126,7 @@ impl TryFrom<&str> for PackageIdentifier {
         };
 
         Ok(Self {
-            namespace: namespace.into(),
-            name: name.into(),
+            name: PackageName::new(namespace, name),
             version,
         })
     }
@@ -93,12 +143,12 @@ impl std::fmt::Display for PackageIdentifier {
         if let Some(version) = self.version() {
             f.write_fmt(format_args!(
                 "{}:{}@{}",
-                self.namespace(),
-                self.name(),
+                self.name().namespace(),
+                self.name().name(),
                 version
             ))
         } else {
-            f.write_fmt(format_args!("{}:{}", self.namespace(), self.name()))
+            f.write_fmt(format_args!("{}:{}", self.name().namespace(), self.name().name()))
         }
     }
 }
@@ -164,7 +214,7 @@ impl TryFrom<&str> for InterfaceIdentifier {
         };
 
         Ok(Self {
-            package: PackageIdentifier::new(namespace, name, version),
+            package: PackageIdentifier::new(PackageName::new(namespace, name), version),
             name: interface_name.into(),
         })
     }
@@ -181,16 +231,16 @@ impl std::fmt::Display for InterfaceIdentifier {
         if let Some(version) = self.package.version() {
             f.write_fmt(format_args!(
                 "{}:{}/{}@{}",
-                self.package().namespace(),
-                self.package().name(),
+                self.package().name().namespace(),
+                self.package().name().name(),
                 self.name(),
                 version
             ))
         } else {
             f.write_fmt(format_args!(
                 "{}:{}/{}",
-                self.package().namespace(),
-                self.package().name(),
+                self.package().name().namespace(),
+                self.package().name().name(),
                 self.name()
             ))
         }
