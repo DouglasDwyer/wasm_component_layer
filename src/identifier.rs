@@ -14,13 +14,10 @@ pub struct PackageName {
 
 impl PackageName {
     /// Creates a new package identifier for the given namespace and name.
-    pub fn new(
-        namespace: impl Into<Arc<str>>,
-        name: impl Into<Arc<str>>
-    ) -> Self {
+    pub fn new(namespace: impl Into<Arc<str>>, name: impl Into<Arc<str>>) -> Self {
         Self {
             name: name.into(),
-            namespace: namespace.into()
+            namespace: namespace.into(),
         }
     }
 
@@ -75,14 +72,8 @@ pub struct PackageIdentifier {
 
 impl PackageIdentifier {
     /// Creates a new package identifier for the given namespace, name, and version.
-    pub fn new(
-        name: PackageName,
-        version: Option<semver::Version>,
-    ) -> Self {
-        Self {
-            name,
-            version,
-        }
+    pub fn new(name: PackageName, version: Option<semver::Version>) -> Self {
+        Self { name, version }
     }
 
     /// Gets the name of the package.
@@ -148,7 +139,11 @@ impl std::fmt::Display for PackageIdentifier {
                 version
             ))
         } else {
-            f.write_fmt(format_args!("{}:{}", self.name().namespace(), self.name().name()))
+            f.write_fmt(format_args!(
+                "{}:{}",
+                self.name().namespace(),
+                self.name().name()
+            ))
         }
     }
 }

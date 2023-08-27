@@ -115,15 +115,15 @@ use wasmtime_environ::component::*;
 use wit_component::*;
 use wit_parser::*;
 
-pub use crate::func::*;
 pub use crate::func::Func;
-pub use crate::identifier::*;
+pub use crate::func::*;
 pub use crate::identifier::PackageName;
+pub use crate::identifier::*;
 use crate::require_matches::*;
 pub use crate::types::*;
-pub use crate::types::{VariantCase, ValueType, FuncType};
+pub use crate::types::{FuncType, ValueType, VariantCase};
 pub use crate::values::*;
-pub use crate::values::{Flags, Enum, Record, Tuple, Value, Variant, Union};
+pub use crate::values::{Enum, Flags, Record, Tuple, Union, Value, Variant};
 
 /// A parsed and validated WebAssembly component, which may be used to instantiate [`Instance`]s.
 #[derive(Clone, Debug)]
