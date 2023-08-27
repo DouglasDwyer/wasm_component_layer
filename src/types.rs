@@ -7,6 +7,7 @@ use anyhow::*;
 use fxhash::*;
 use id_arena::*;
 
+use crate::TypeIdentifier;
 use crate::require_matches;
 use crate::values::ComponentType;
 use crate::{AsContextMut, ComponentInner, StoreContextMut};
@@ -95,29 +96,30 @@ impl ValueType {
         component: &ComponentInner,
         resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
     ) -> Result<Self> {
+        let name = component.type_identifiers[def.index()].clone();
         Ok(match &component.resolve.types[def].kind {
             wit_parser::TypeDefKind::Record(x) => {
-                Self::Record(RecordType::from_component(x, component, resource_map)?)
+                Self::Record(RecordType::from_component(name, x, component, resource_map)?)
             }
             wit_parser::TypeDefKind::Resource => bail!("Cannot instantiate resource as type."),
             wit_parser::TypeDefKind::Handle(x) => match x {
                 wit_parser::Handle::Own(t) => {
-                    Self::Own(ResourceType::from_resolve(*t, component, resource_map)?)
+                    Self::Own(ResourceType::from_resolve(name, *t, component, resource_map)?)
                 }
                 wit_parser::Handle::Borrow(t) => {
-                    Self::Borrow(ResourceType::from_resolve(*t, component, resource_map)?)
+                    Self::Borrow(ResourceType::from_resolve(name, *t, component, resource_map)?)
                 }
             },
             wit_parser::TypeDefKind::Flags(x) => {
-                Self::Flags(FlagsType::from_component(x, component)?)
+                Self::Flags(FlagsType::from_component(name, x, component)?)
             }
             wit_parser::TypeDefKind::Tuple(x) => {
-                Self::Tuple(TupleType::from_component(x, component, resource_map)?)
+                Self::Tuple(TupleType::from_component(name, x, component, resource_map)?)
             }
             wit_parser::TypeDefKind::Variant(x) => {
-                Self::Variant(VariantType::from_component(x, component, resource_map)?)
+                Self::Variant(VariantType::from_component(name, x, component, resource_map)?)
             }
-            wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_component(x, component)?),
+            wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_component(name, x, component)?),
             wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(
                 Self::from_component(x, component, resource_map)?,
             )),
@@ -132,7 +134,7 @@ impl ValueType {
                 },
             )),
             wit_parser::TypeDefKind::Union(x) => {
-                Self::Union(UnionType::from_component(x, component, resource_map)?)
+                Self::Union(UnionType::from_component(name, x, component, resource_map)?)
             }
             wit_parser::TypeDefKind::List(x) => Self::List(ListType::new(Self::from_component(
                 x,
@@ -169,15 +171,18 @@ impl ListType {
 }
 
 /// Describes the type of an unordered collection of named fields, each associated with the values.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct RecordType {
     /// The fields of the record.
     pub(crate) fields: Arc<[(usize, Arc<str>, ValueType)]>,
+    /// The identifier associated with this type.
+    name: Option<TypeIdentifier>
 }
 
 impl RecordType {
     /// Creates a new record type from the given set of fields. The field names must be unique.
     pub fn new<S: Into<Arc<str>>>(
+        name: Option<TypeIdentifier>,
         fields: impl IntoIterator<Item = (S, ValueType)>,
     ) -> Result<Self> {
         let mut to_sort = fields
@@ -193,7 +198,7 @@ impl RecordType {
             ensure!(pair[0].1 != pair[1].1, "Duplicate field names");
         }
 
-        Ok(Self { fields: to_sort })
+        Ok(Self { fields: to_sort, name })
     }
 
     /// Gets the type of the provided field, if any.
@@ -202,6 +207,11 @@ impl RecordType {
             .iter()
             .filter_map(|(_, x, val)| (&**x == name.as_ref()).then(|| val.clone()))
             .next()
+    }
+
+    /// Gets the name of this type, if any.
+    pub fn name(&self) -> Option<&TypeIdentifier> {
+        self.name.as_ref()
     }
 
     /// Gets an iterator over all field names and values in this record.
@@ -213,6 +223,7 @@ impl RecordType {
 
     /// Creates a new record type, assuming that the fields are already sorted.
     pub(crate) fn new_sorted(
+        name: Option<TypeIdentifier>,
         fields: impl IntoIterator<Item = (Arc<str>, ValueType)>,
     ) -> Result<Self> {
         let result = Self {
@@ -221,6 +232,7 @@ impl RecordType {
                 .enumerate()
                 .map(|(i, (a, b))| (i, a, b))
                 .collect(),
+            name
         };
 
         for pair in result.fields.windows(2) {
@@ -232,6 +244,7 @@ impl RecordType {
 
     /// Creates the record type from the given component.
     fn from_component(
+        name: Option<TypeIdentifier>,
         ty: &wit_parser::Record,
         component: &ComponentInner,
         resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
@@ -256,21 +269,38 @@ impl RecordType {
             ensure!(pair[0].0 != pair[1].0, "Duplicate field names");
         }
 
-        Ok(Self { fields: to_sort })
+        Ok(Self { fields: to_sort, name })
+    }
+}
+
+impl PartialEq for RecordType {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields
+    }
+}
+
+impl Eq for RecordType {}
+
+impl Hash for RecordType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.fields.hash(state);
     }
 }
 
 /// Describes the type of an ordered, unnamed sequence of heterogenously-typed values.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct TupleType {
     /// The types of the tuple fields.
     fields: Arc<[ValueType]>,
+    /// The name of the type.
+    name: Option<TypeIdentifier>
 }
 
 impl TupleType {
     /// Creates a tuple for the specified list of fields.
-    pub fn new(fields: impl IntoIterator<Item = ValueType>) -> Self {
+    pub fn new(name: Option<TypeIdentifier>, fields: impl IntoIterator<Item = ValueType>) -> Self {
         Self {
+            name,
             fields: fields.into_iter().collect(),
         }
     }
@@ -280,8 +310,14 @@ impl TupleType {
         &self.fields
     }
 
+    /// Gets the name of this type, if any.
+    pub fn name(&self) -> Option<&TypeIdentifier> {
+        self.name.as_ref()
+    }
+
     /// Creates this type from the given component.
     fn from_component(
+        name: Option<TypeIdentifier>,
         ty: &wit_parser::Tuple,
         component: &ComponentInner,
         resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
@@ -291,7 +327,21 @@ impl TupleType {
             .iter()
             .map(|x| ValueType::from_component(x, component, resource_map))
             .collect::<Result<_>>()?;
-        Ok(Self { fields })
+        Ok(Self { name, fields })
+    }
+}
+
+impl PartialEq for TupleType {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields
+    }
+}
+
+impl Eq for TupleType {}
+
+impl Hash for TupleType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.fields.hash(state);
     }
 }
 
@@ -326,15 +376,17 @@ impl VariantCase {
 
 /// Describes a type has multiple possible states. Each state may optionally
 /// have a type associated with it.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct VariantType {
     /// The cases of this variant.
     cases: Arc<[VariantCase]>,
+    /// The name of the type.
+    name: Option<TypeIdentifier>
 }
 
 impl VariantType {
     /// Creates a new type for the given set of variant cases. Each case must have a unique name.
-    pub fn new(cases: impl IntoIterator<Item = VariantCase>) -> Result<Self> {
+    pub fn new(name: Option<TypeIdentifier>, cases: impl IntoIterator<Item = VariantCase>) -> Result<Self> {
         let cases: Arc<_> = cases.into_iter().collect();
 
         for i in 0..cases.len() {
@@ -343,7 +395,7 @@ impl VariantType {
             }
         }
 
-        Ok(Self { cases })
+        Ok(Self { name, cases })
     }
 
     /// Gets all of the cases for this variant.
@@ -351,8 +403,14 @@ impl VariantType {
         &self.cases
     }
 
+    /// Gets the name of this type, if any.
+    pub fn name(&self) -> Option<&TypeIdentifier> {
+        self.name.as_ref()
+    }
+
     /// Creates this type from the given component.
     fn from_component(
+        name: Option<TypeIdentifier>,
         ty: &wit_parser::Variant,
         component: &ComponentInner,
         resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
@@ -377,21 +435,38 @@ impl VariantType {
             }
         }
 
-        Ok(Self { cases })
+        Ok(Self { name, cases })
+    }
+}
+
+impl PartialEq for VariantType {
+    fn eq(&self, other: &Self) -> bool {
+        self.cases == other.cases
+    }
+}
+
+impl Eq for VariantType {}
+
+impl Hash for VariantType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.cases.hash(state);
     }
 }
 
 /// A type that has multiple possible states.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct EnumType {
     /// The cases of the enum.
     cases: Arc<[Arc<str>]>,
+    /// The name of the type.
+    name: Option<TypeIdentifier>
 }
 
 impl EnumType {
     /// Creates a new enumeration from the list of case names. The case names must be unique.
-    pub fn new<S: Into<Arc<str>>>(cases: impl IntoIterator<Item = S>) -> Result<Self> {
+    pub fn new<S: Into<Arc<str>>>(name: Option<TypeIdentifier>, cases: impl IntoIterator<Item = S>) -> Result<Self> {
         let res = Self {
+            name,
             cases: cases
                 .into_iter()
                 .map(|x| Into::<Arc<str>>::into(x))
@@ -407,32 +482,59 @@ impl EnumType {
         Ok(res)
     }
 
+    /// Gets the name of this type, if any.
+    pub fn name(&self) -> Option<&TypeIdentifier> {
+        self.name.as_ref()
+    }
+
     /// Gets a list of all cases in this enum.
     pub fn cases(&self) -> impl ExactSizeIterator<Item = &str> {
         self.cases.iter().map(|x| &**x)
     }
 
     /// Creates this type from the given component.
-    fn from_component(ty: &wit_parser::Enum, _component: &ComponentInner) -> Result<Self> {
-        Self::new(ty.cases.iter().map(|x| x.name.as_str()))
+    fn from_component(name: Option<TypeIdentifier>,ty: &wit_parser::Enum, _component: &ComponentInner) -> Result<Self> {
+        Self::new(name, ty.cases.iter().map(|x| x.name.as_str()))
+    }
+}
+
+impl PartialEq for EnumType {
+    fn eq(&self, other: &Self) -> bool {
+        self.cases == other.cases
+    }
+}
+
+impl Eq for EnumType {}
+
+impl Hash for EnumType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.cases.hash(state)
     }
 }
 
 /// A type that has multiple possible states, each with an associated type.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct UnionType {
     /// The cases for this union.
     cases: Arc<[ValueType]>,
+    /// The name of the type.
+    name: Option<TypeIdentifier>
 }
 
 impl UnionType {
     /// Creates a new union type from the given list of value types.
-    pub fn new(cases: impl IntoIterator<Item = ValueType>) -> Result<Self> {
+    pub fn new(name: Option<TypeIdentifier>, cases: impl IntoIterator<Item = ValueType>) -> Result<Self> {
         let res = Self {
+            name,
             cases: cases.into_iter().collect(),
         };
 
         Ok(res)
+    }
+
+    /// Gets the name of this type, if any.
+    pub fn name(&self) -> Option<&TypeIdentifier> {
+        self.name.as_ref()
     }
 
     /// The cases of this union.
@@ -442,6 +544,7 @@ impl UnionType {
 
     /// Creates a new type from the given component.
     fn from_component(
+        name: Option<TypeIdentifier>,
         ty: &wit_parser::Union,
         component: &ComponentInner,
         resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
@@ -452,7 +555,21 @@ impl UnionType {
             .map(|x| ValueType::from_component(&x.ty, component, resource_map))
             .collect::<Result<_>>()?;
 
-        Ok(Self { cases })
+        Ok(Self { name, cases })
+    }
+}
+
+impl PartialEq for UnionType {
+    fn eq(&self, other: &Self) -> bool {
+        self.cases == other.cases
+    }
+}
+
+impl Eq for UnionType {}
+
+impl Hash for UnionType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.cases.hash(state)
     }
 }
 
@@ -502,17 +619,19 @@ impl ResultType {
 }
 
 /// A type that denotes a set of named bitflags.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct FlagsType {
     /// The names of each flags.
     names: Arc<[Arc<str>]>,
     /// A mapping from flag name to index.
     pub(crate) indices: Arc<FxHashMap<Arc<str>, usize>>,
+    /// The name of the type.
+    name: Option<TypeIdentifier>
 }
 
 impl FlagsType {
     /// Creates a new flags type with the specified list of names. The names must be unique.
-    pub fn new<S: Into<Arc<str>>>(names: impl IntoIterator<Item = S>) -> Result<Self> {
+    pub fn new<S: Into<Arc<str>>>(name: Option<TypeIdentifier>, names: impl IntoIterator<Item = S>) -> Result<Self> {
         let names: Arc<_> = names
             .into_iter()
             .map(|x| Into::<Arc<str>>::into(x))
@@ -532,7 +651,12 @@ impl FlagsType {
                 .collect(),
         );
 
-        Ok(Self { names, indices })
+        Ok(Self { name, names, indices })
+    }
+
+    /// Gets the name of this type, if any.
+    pub fn name(&self) -> Option<&TypeIdentifier> {
+        self.name.as_ref()
     }
 
     /// Gets an iterator over the names of the flags in this collection.
@@ -541,10 +665,18 @@ impl FlagsType {
     }
 
     /// Creates this type from the given component.
-    fn from_component(ty: &wit_parser::Flags, _component: &ComponentInner) -> Result<Self> {
-        Self::new(ty.flags.iter().map(|x| x.name.as_ref()))
+    fn from_component(name: Option<TypeIdentifier>, ty: &wit_parser::Flags, _component: &ComponentInner) -> Result<Self> {
+        Self::new(name, ty.flags.iter().map(|x| x.name.as_ref()))
     }
 }
+
+impl PartialEq for FlagsType {
+    fn eq(&self, other: &Self) -> bool {
+        self.names == other.names
+    }
+}
+
+impl Eq for FlagsType {}
 
 impl Hash for FlagsType {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -566,13 +698,16 @@ static RESOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct ResourceType {
     /// The kind of resource that this is.
     kind: ResourceKindValue,
+    /// The name of the type.
+    name: Option<TypeIdentifier>
 }
 
 impl ResourceType {
     /// Creates a new host resource for storing values of the given type. Note that multiple
     /// resource types may be created for the same `T`, and they will be distinct.
-    pub fn new<T: 'static + Send + Sync + Sized>() -> Self {
+    pub fn new<T: 'static + Send + Sync + Sized>(name: Option<TypeIdentifier>) -> Self {
         Self {
+            name,
             kind: ResourceKindValue::Host {
                 resource_id: RESOURCE_ID_COUNTER.fetch_add(1, Ordering::AcqRel),
                 type_id: TypeId::of::<T>(),
@@ -586,6 +721,7 @@ impl ResourceType {
     /// resource types may be created for the same `T`, and they will be distinct.
     pub fn with_destructor<T: 'static + Send + Sync + Sized, C: AsContextMut>(
         mut ctx: C,
+        name: Option<TypeIdentifier>,
         destructor: impl 'static
             + Send
             + Sync
@@ -612,12 +748,18 @@ impl ResourceType {
         );
 
         Ok(Self {
+            name,
             kind: ResourceKindValue::Host {
                 resource_id: RESOURCE_ID_COUNTER.fetch_add(1, Ordering::AcqRel),
                 type_id: TypeId::of::<T>(),
                 associated_store: Some((store_id, destructor)),
             },
         })
+    }
+
+    /// Gets the name of this type, if any.
+    pub fn name(&self) -> Option<&TypeIdentifier> {
+        self.name.as_ref()
     }
 
     /// Determines whether this resource type can be used to extract host values of `T` from the provided store.
@@ -649,11 +791,13 @@ impl ResourceType {
 
     /// Creates this type from the given component.
     pub(crate) fn from_resolve(
+        name: Option<TypeIdentifier>,
         id: Id<wit_parser::TypeDef>,
         component: &ComponentInner,
         resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
     ) -> Result<Self> {
         let ab = Self {
+            name,
             kind: ResourceKindValue::Abstract {
                 id: id.index(),
                 component: component.id,
@@ -682,6 +826,7 @@ impl ResourceType {
     pub(crate) fn instantiate(&self, instance: u64) -> Result<Self> {
         if let ResourceKindValue::Abstract { id, component: _ } = &self.kind {
             Ok(Self {
+                name: self.name.clone(),
                 kind: ResourceKindValue::Instantiated { id: *id, instance },
             })
         } else {

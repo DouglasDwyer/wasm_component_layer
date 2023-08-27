@@ -165,7 +165,7 @@ impl Component {
         let decoded = wit_component::decode(bytes)
             .context("Could not decode component information from bytes.")?;
 
-        let (resolve, world_id) = match decoded {
+        let (mut resolve, world_id) = match decoded {
             DecodedWasm::WitPackage(..) => bail!("Cannot instantiate WIT package as module."),
             DecodedWasm::Component(resolve, id) => (resolve, id),
         };
@@ -201,6 +201,8 @@ impl Component {
         let interface_identifiers =
             Self::generate_interface_identifiers(&resolve, &package_identifiers)?;
 
+        let type_identifiers = Self::generate_type_identifiers(&mut resolve, &interface_identifiers);
+
         Ok((
             ComponentInner {
                 export_mapping,
@@ -215,6 +217,7 @@ impl Component {
                 generated_trampolines: FxHashMap::default(),
                 instance_modules: wasmtime_environ::PrimaryMap::default(),
                 interface_identifiers,
+                type_identifiers,
                 modules,
                 resource_map: vec![
                     TypeResourceTableIndex::from_u32(u32::MAX - 1);
@@ -230,6 +233,25 @@ impl Component {
         ))
     }
 
+    /// Generates type identifiers for all types in the resolve.
+    fn generate_type_identifiers(resolve: &mut Resolve, interface_ids: &[InterfaceIdentifier]) -> Vec<Option<TypeIdentifier>> {
+        let mut ids = Vec::with_capacity(resolve.types.len());
+
+        for (_, def) in &mut resolve.types {
+            if let Some(name) = std::mem::take(&mut def.name) {
+                ids.push(Some(TypeIdentifier::new(name, match &def.owner {
+                    TypeOwner::Interface(x) => Some(interface_ids[x.index()].clone()),
+                    _ => None
+                })));
+            }
+            else {
+                ids.push(None);
+            }
+        }
+
+        ids
+    }
+    
     /// Creates a mapping from module index to entities, used to resolve component exports at link-time.
     fn generate_export_mapping(
         module_data: &wasmtime_environ::PrimaryMap<
@@ -265,7 +287,7 @@ impl Component {
                                     .resources
                                     .insert(
                                         name.as_str().into(),
-                                        ResourceType::from_resolve(*x, &inner, None)?
+                                        ResourceType::from_resolve(inner.type_identifiers[x.index()].clone(), *x, &inner, None)?
                                     )
                                     .is_none(),
                                 "Duplicate resource import."
@@ -276,7 +298,7 @@ impl Component {
                 WorldItem::Interface(x) => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
-                            let ty = ResourceType::from_resolve(*ty, &inner, None)?;
+                            let ty = ResourceType::from_resolve(inner.type_identifiers[ty.index()].clone(), *ty, &inner, None)?;
                             let entry = inner
                                 .import_types
                                 .instances
@@ -305,7 +327,7 @@ impl Component {
                                     .resources
                                     .insert(
                                         name.as_str().into(),
-                                        ResourceType::from_resolve(*x, &inner, None)?
+                                        ResourceType::from_resolve(inner.type_identifiers[x.index()].clone(), *x, &inner, None)?
                                     )
                                     .is_none(),
                                 "Duplicate resource export."
@@ -316,7 +338,7 @@ impl Component {
                 WorldItem::Interface(x) => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
-                            let ty = ResourceType::from_resolve(*ty, &inner, None)?;
+                            let ty = ResourceType::from_resolve(inner.type_identifiers[ty.index()].clone(), *ty, &inner, None)?;
                             let entry = inner
                                 .export_types
                                 .instances
@@ -871,6 +893,8 @@ struct ComponentInner {
     pub instance_modules: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, StaticModuleIndex>,
     /// A mapping from interface ID to parsed identifier.
     pub interface_identifiers: Vec<InterfaceIdentifier>,
+    /// A mapping from type ID to parsed identifier.
+    pub type_identifiers: Vec<Option<TypeIdentifier>>,
     /// The translated modules of this component.
     pub modules: FxHashMap<StaticModuleIndex, ModuleTranslation>,
     /// The resolved WIT of the component.
@@ -1733,7 +1757,7 @@ impl Instance {
             let val = inner.component.0.resource_map[i.index()];
             (val.as_u32() < u32::MAX - 1).then_some((i, val))
         }) {
-            let res = ResourceType::from_resolve(id, &inner.component.0, Some(resource_map))?;
+            let res = ResourceType::from_resolve(inner.component.0.type_identifiers[id.index()].clone(), id, &inner.component.0, Some(resource_map))?;
             match res.host_destructor() {
                 Some(Some(func)) => tables[idx.as_u32() as usize].set_destructor(Some(func)),
                 Some(None) => tables[idx.as_u32() as usize]

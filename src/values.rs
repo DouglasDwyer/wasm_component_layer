@@ -8,6 +8,7 @@ use std::sync::*;
 use anyhow::*;
 use private::*;
 
+use crate::TypeIdentifier;
 use crate::require_matches::require_matches;
 use crate::types::*;
 use crate::AsContext;
@@ -328,6 +329,7 @@ impl Record {
 
     /// Constructs a record from the provided fields, dynamically determining the type.
     pub fn from_fields<S: Into<Arc<str>>>(
+        name: Option<TypeIdentifier>,
         values: impl IntoIterator<Item = (S, Value)>,
     ) -> Result<Self> {
         let mut fields = values
@@ -337,7 +339,7 @@ impl Record {
         Arc::get_mut(&mut fields)
             .expect("Could not get exclusive reference.")
             .sort_by(|a, b| a.0.cmp(&b.0));
-        let ty = RecordType::new_sorted(fields.iter().map(|(name, val)| (name.clone(), val.ty())))?;
+        let ty = RecordType::new_sorted(name, fields.iter().map(|(name, val)| (name.clone(), val.ty())))?;
         Ok(Self { fields, ty })
     }
 
@@ -406,9 +408,9 @@ impl Tuple {
     }
 
     /// Creates a new tuple from the provided fields, inferring the type.
-    pub fn from_fields(fields: impl IntoIterator<Item = Value>) -> Self {
+    pub fn from_fields(name: Option<TypeIdentifier>, fields: impl IntoIterator<Item = Value>) -> Self {
         let fields: Arc<_> = fields.into_iter().collect();
-        let ty = TupleType::new(fields.iter().map(|x| x.ty()));
+        let ty = TupleType::new(name, fields.iter().map(|x| x.ty()));
         Self { fields, ty }
     }
 

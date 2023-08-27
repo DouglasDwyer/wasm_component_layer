@@ -3,6 +3,52 @@ use std::sync::*;
 use anyhow::*;
 use wit_parser::*;
 
+/// Describes the name of a component type.
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub struct TypeIdentifier {
+    /// The name of the type.
+    name: Arc<str>,
+    /// The interface in which the type was defined, if any.
+    interface: Option<InterfaceIdentifier>
+}
+
+impl TypeIdentifier {
+    /// Creates a new type identifier for the given name and interface.
+    pub fn new(name: impl Into<Arc<str>>, interface: Option<InterfaceIdentifier>) -> Self {
+        Self {
+            name: name.into(),
+            interface
+        }
+    }
+
+    /// Gets the name of the type.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Gets the interface in which the type was defined, if any.
+    pub fn interface(&self) -> Option<&InterfaceIdentifier> {
+        self.interface.as_ref()
+    }
+}
+
+impl std::fmt::Debug for TypeIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for TypeIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(inter) = &self.interface {
+            f.write_fmt(format_args!("{}.{}", inter, self.name()))
+        }
+        else {
+            f.write_fmt(format_args!("{}", self.name()))
+        }
+    }
+}
+
 /// Uniquely identifies a WASM package within a registry.
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct PackageName {
