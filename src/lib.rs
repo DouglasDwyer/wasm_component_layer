@@ -116,11 +116,14 @@ use wit_component::*;
 use wit_parser::*;
 
 pub use crate::func::*;
+pub use crate::func::Func;
 pub use crate::identifier::*;
 pub use crate::identifier::PackageName;
 use crate::require_matches::*;
 pub use crate::types::*;
+pub use crate::types::{VariantCase, ValueType, FuncType};
 pub use crate::values::*;
+pub use crate::values::{Flags, Enum, Record, Tuple, Value, Variant, Union};
 
 /// A parsed and validated WebAssembly component, which may be used to instantiate [`Instance`]s.
 #[derive(Clone, Debug)]
@@ -1478,7 +1481,7 @@ impl Instance {
                             &component_import.func,
                         );
 
-                        Ok(Extern::Func(Func::new(
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |ctx, args, results| {
@@ -1490,7 +1493,7 @@ impl Instance {
                     GeneratedTrampoline::ResourceNew(x) => {
                         let x = x.as_u32();
                         let tables = inner.state_table.clone();
-                        Ok(Extern::Func(Func::new(
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
@@ -1514,7 +1517,7 @@ impl Instance {
                     GeneratedTrampoline::ResourceRep(x) => {
                         let x = x.as_u32();
                         let tables = inner.state_table.clone();
-                        Ok(Extern::Func(Func::new(
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
@@ -1535,7 +1538,7 @@ impl Instance {
                         destructors.push(*x);
                         let x = y.as_u32();
                         let tables = inner.state_table.clone();
-                        Ok(Extern::Func(Func::new(
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |ctx, args, _results| {
