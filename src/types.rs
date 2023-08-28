@@ -7,9 +7,9 @@ use anyhow::*;
 use fxhash::*;
 use id_arena::*;
 
-use crate::TypeIdentifier;
 use crate::require_matches;
 use crate::values::ComponentType;
+use crate::TypeIdentifier;
 use crate::{AsContextMut, ComponentInner, StoreContextMut};
 
 /// Represents a component model interface type.
@@ -98,17 +98,26 @@ impl ValueType {
     ) -> Result<Self> {
         let name = component.type_identifiers[def.index()].clone();
         Ok(match &component.resolve.types[def].kind {
-            wit_parser::TypeDefKind::Record(x) => {
-                Self::Record(RecordType::from_component(name, x, component, resource_map)?)
-            }
+            wit_parser::TypeDefKind::Record(x) => Self::Record(RecordType::from_component(
+                name,
+                x,
+                component,
+                resource_map,
+            )?),
             wit_parser::TypeDefKind::Resource => bail!("Cannot instantiate resource as type."),
             wit_parser::TypeDefKind::Handle(x) => match x {
-                wit_parser::Handle::Own(t) => {
-                    Self::Own(ResourceType::from_resolve(name, *t, component, resource_map)?)
-                }
-                wit_parser::Handle::Borrow(t) => {
-                    Self::Borrow(ResourceType::from_resolve(name, *t, component, resource_map)?)
-                }
+                wit_parser::Handle::Own(t) => Self::Own(ResourceType::from_resolve(
+                    name,
+                    *t,
+                    component,
+                    resource_map,
+                )?),
+                wit_parser::Handle::Borrow(t) => Self::Borrow(ResourceType::from_resolve(
+                    name,
+                    *t,
+                    component,
+                    resource_map,
+                )?),
             },
             wit_parser::TypeDefKind::Flags(x) => {
                 Self::Flags(FlagsType::from_component(name, x, component)?)
@@ -116,10 +125,15 @@ impl ValueType {
             wit_parser::TypeDefKind::Tuple(x) => {
                 Self::Tuple(TupleType::from_component(name, x, component, resource_map)?)
             }
-            wit_parser::TypeDefKind::Variant(x) => {
-                Self::Variant(VariantType::from_component(name, x, component, resource_map)?)
+            wit_parser::TypeDefKind::Variant(x) => Self::Variant(VariantType::from_component(
+                name,
+                x,
+                component,
+                resource_map,
+            )?),
+            wit_parser::TypeDefKind::Enum(x) => {
+                Self::Enum(EnumType::from_component(name, x, component)?)
             }
-            wit_parser::TypeDefKind::Enum(x) => Self::Enum(EnumType::from_component(name, x, component)?),
             wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(
                 Self::from_component(x, component, resource_map)?,
             )),
@@ -176,7 +190,7 @@ pub struct RecordType {
     /// The fields of the record.
     pub(crate) fields: Arc<[(usize, Arc<str>, ValueType)]>,
     /// The identifier associated with this type.
-    name: Option<TypeIdentifier>
+    name: Option<TypeIdentifier>,
 }
 
 impl RecordType {
@@ -198,7 +212,10 @@ impl RecordType {
             ensure!(pair[0].1 != pair[1].1, "Duplicate field names");
         }
 
-        Ok(Self { fields: to_sort, name })
+        Ok(Self {
+            fields: to_sort,
+            name,
+        })
     }
 
     /// Gets the type of the provided field, if any.
@@ -232,7 +249,7 @@ impl RecordType {
                 .enumerate()
                 .map(|(i, (a, b))| (i, a, b))
                 .collect(),
-            name
+            name,
         };
 
         for pair in result.fields.windows(2) {
@@ -269,7 +286,10 @@ impl RecordType {
             ensure!(pair[0].0 != pair[1].0, "Duplicate field names");
         }
 
-        Ok(Self { fields: to_sort, name })
+        Ok(Self {
+            fields: to_sort,
+            name,
+        })
     }
 }
 
@@ -293,7 +313,7 @@ pub struct TupleType {
     /// The types of the tuple fields.
     fields: Arc<[ValueType]>,
     /// The name of the type.
-    name: Option<TypeIdentifier>
+    name: Option<TypeIdentifier>,
 }
 
 impl TupleType {
@@ -381,12 +401,15 @@ pub struct VariantType {
     /// The cases of this variant.
     cases: Arc<[VariantCase]>,
     /// The name of the type.
-    name: Option<TypeIdentifier>
+    name: Option<TypeIdentifier>,
 }
 
 impl VariantType {
     /// Creates a new type for the given set of variant cases. Each case must have a unique name.
-    pub fn new(name: Option<TypeIdentifier>, cases: impl IntoIterator<Item = VariantCase>) -> Result<Self> {
+    pub fn new(
+        name: Option<TypeIdentifier>,
+        cases: impl IntoIterator<Item = VariantCase>,
+    ) -> Result<Self> {
         let cases: Arc<_> = cases.into_iter().collect();
 
         for i in 0..cases.len() {
@@ -459,12 +482,15 @@ pub struct EnumType {
     /// The cases of the enum.
     cases: Arc<[Arc<str>]>,
     /// The name of the type.
-    name: Option<TypeIdentifier>
+    name: Option<TypeIdentifier>,
 }
 
 impl EnumType {
     /// Creates a new enumeration from the list of case names. The case names must be unique.
-    pub fn new<S: Into<Arc<str>>>(name: Option<TypeIdentifier>, cases: impl IntoIterator<Item = S>) -> Result<Self> {
+    pub fn new<S: Into<Arc<str>>>(
+        name: Option<TypeIdentifier>,
+        cases: impl IntoIterator<Item = S>,
+    ) -> Result<Self> {
         let res = Self {
             name,
             cases: cases
@@ -493,7 +519,11 @@ impl EnumType {
     }
 
     /// Creates this type from the given component.
-    fn from_component(name: Option<TypeIdentifier>,ty: &wit_parser::Enum, _component: &ComponentInner) -> Result<Self> {
+    fn from_component(
+        name: Option<TypeIdentifier>,
+        ty: &wit_parser::Enum,
+        _component: &ComponentInner,
+    ) -> Result<Self> {
         Self::new(name, ty.cases.iter().map(|x| x.name.as_str()))
     }
 }
@@ -518,12 +548,15 @@ pub struct UnionType {
     /// The cases for this union.
     cases: Arc<[ValueType]>,
     /// The name of the type.
-    name: Option<TypeIdentifier>
+    name: Option<TypeIdentifier>,
 }
 
 impl UnionType {
     /// Creates a new union type from the given list of value types.
-    pub fn new(name: Option<TypeIdentifier>, cases: impl IntoIterator<Item = ValueType>) -> Result<Self> {
+    pub fn new(
+        name: Option<TypeIdentifier>,
+        cases: impl IntoIterator<Item = ValueType>,
+    ) -> Result<Self> {
         let res = Self {
             name,
             cases: cases.into_iter().collect(),
@@ -626,12 +659,15 @@ pub struct FlagsType {
     /// A mapping from flag name to index.
     pub(crate) indices: Arc<FxHashMap<Arc<str>, usize>>,
     /// The name of the type.
-    name: Option<TypeIdentifier>
+    name: Option<TypeIdentifier>,
 }
 
 impl FlagsType {
     /// Creates a new flags type with the specified list of names. The names must be unique.
-    pub fn new<S: Into<Arc<str>>>(name: Option<TypeIdentifier>, names: impl IntoIterator<Item = S>) -> Result<Self> {
+    pub fn new<S: Into<Arc<str>>>(
+        name: Option<TypeIdentifier>,
+        names: impl IntoIterator<Item = S>,
+    ) -> Result<Self> {
         let names: Arc<_> = names
             .into_iter()
             .map(|x| Into::<Arc<str>>::into(x))
@@ -651,7 +687,11 @@ impl FlagsType {
                 .collect(),
         );
 
-        Ok(Self { name, names, indices })
+        Ok(Self {
+            name,
+            names,
+            indices,
+        })
     }
 
     /// Gets the name of this type, if any.
@@ -665,7 +705,11 @@ impl FlagsType {
     }
 
     /// Creates this type from the given component.
-    fn from_component(name: Option<TypeIdentifier>, ty: &wit_parser::Flags, _component: &ComponentInner) -> Result<Self> {
+    fn from_component(
+        name: Option<TypeIdentifier>,
+        ty: &wit_parser::Flags,
+        _component: &ComponentInner,
+    ) -> Result<Self> {
         Self::new(name, ty.flags.iter().map(|x| x.name.as_ref()))
     }
 }
@@ -699,7 +743,7 @@ pub struct ResourceType {
     /// The kind of resource that this is.
     kind: ResourceKindValue,
     /// The name of the type.
-    name: Option<TypeIdentifier>
+    name: Option<TypeIdentifier>,
 }
 
 impl ResourceType {
@@ -1077,7 +1121,7 @@ impl<T: ComponentType> ComponentList for T {
     fn from_values(values: &[crate::values::Value]) -> Result<Self> {
         assert!(values.len() == 1);
         T::from_value(&values[0])
-    }    
+    }
 }
 
 /// A function that returns a single result, and eats a macro parameter in the process.

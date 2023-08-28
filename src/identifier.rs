@@ -9,7 +9,7 @@ pub struct TypeIdentifier {
     /// The name of the type.
     name: Arc<str>,
     /// The interface in which the type was defined, if any.
-    interface: Option<InterfaceIdentifier>
+    interface: Option<InterfaceIdentifier>,
 }
 
 impl TypeIdentifier {
@@ -17,7 +17,7 @@ impl TypeIdentifier {
     pub fn new(name: impl Into<Arc<str>>, interface: Option<InterfaceIdentifier>) -> Self {
         Self {
             name: name.into(),
-            interface
+            interface,
         }
     }
 
@@ -42,8 +42,7 @@ impl std::fmt::Display for TypeIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(inter) = &self.interface {
             f.write_fmt(format_args!("{}.{}", inter, self.name()))
-        }
-        else {
+        } else {
             f.write_fmt(format_args!("{}", self.name()))
         }
     }
