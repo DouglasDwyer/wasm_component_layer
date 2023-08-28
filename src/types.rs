@@ -1030,7 +1030,7 @@ impl FuncType {
 }
 
 /// Marks a list of components that can be passed as parameters and results.
-pub trait ComponentList: Sized {
+pub trait ComponentList: 'static + Sized {
     /// The length of the component list.
     const LEN: usize;
 
@@ -1058,6 +1058,26 @@ impl ComponentList for () {
     fn into_values(self, _values: &mut [crate::values::Value]) -> Result<()> {
         Ok(())
     }
+}
+
+impl<T: ComponentType> ComponentList for T {
+    const LEN: usize = 1;
+
+    fn into_tys(types: &mut [ValueType]) {
+        assert!(types.len() == 1);
+        types[0] = T::ty();
+    }
+
+    fn into_values(self, values: &mut [crate::values::Value]) -> Result<()> {
+        assert!(values.len() == 1);
+        values[0] = T::into_value(self)?;
+        Ok(())
+    }
+
+    fn from_values(values: &[crate::values::Value]) -> Result<Self> {
+        assert!(values.len() == 1);
+        T::from_value(&values[0])
+    }    
 }
 
 /// A function that returns a single result, and eats a macro parameter in the process.

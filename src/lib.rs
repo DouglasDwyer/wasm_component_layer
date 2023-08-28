@@ -55,12 +55,12 @@
 //!     // Get the interface that the interface exports.
 //!     let interface = instance.exports().instance(&"test:guest/foo".try_into().unwrap()).unwrap();
 //!     // Get the function for selecting a list element.
-//!     let select_nth = interface.func("select-nth").unwrap().typed::<(Vec<String>, u32), (String,)>().unwrap();
+//!     let select_nth = interface.func("select-nth").unwrap().typed::<(Vec<String>, u32), String>().unwrap();
 //!
 //!     // Create an example list to test upon.
 //!     let example = ["a", "b", "c"].iter().map(ToString::to_string).collect::<Vec<_>>();
 //!     
-//!     println!("Calling select-nth({example:?}, 1) == {}", select_nth.call(&mut store, (example.clone(), 1)).unwrap().0);
+//!     println!("Calling select-nth({example:?}, 1) == {}", select_nth.call(&mut store, (example.clone(), 1)).unwrap());
 //!     // Prints 'Calling select-nth(["a", "b", "c"], 1) == b'
 //! }
 //! ```

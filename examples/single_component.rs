@@ -26,7 +26,7 @@ pub fn main() {
     let select_nth = interface
         .func("select-nth")
         .unwrap()
-        .typed::<(Vec<String>, u32), (String,)>()
+        .typed::<(Vec<String>, u32), String>()
         .unwrap();
 
     // Create an example list to test upon.
@@ -37,7 +37,7 @@ pub fn main() {
 
     println!(
         "Calling select-nth({example:?}, 1) == {}",
-        select_nth.call(&mut store, (example.clone(), 1)).unwrap().0
+        select_nth.call(&mut store, (example.clone(), 1)).unwrap()
     );
     // Prints 'Calling select-nth(["a", "b", "c"], 1) == b'
 }
