@@ -324,7 +324,6 @@ def_instruction! {
         /// its fields, and then pushes the fields onto the stack.
         RecordLower {
             record: &'a Record,
-            name: &'a str,
             ty: TypeId,
         } : [1] => [record.fields.len()],
 
@@ -332,21 +331,18 @@ def_instruction! {
         /// into a record.
         RecordLift {
             record: &'a Record,
-            name: &'a str,
             ty: TypeId,
         } : [record.fields.len()] => [1],
 
         /// Create an `i32` from a handle.
         HandleLower {
             handle: &'a Handle,
-            name: &'a str,
             ty: TypeId,
         } : [1] => [1],
 
         /// Create a handle from an `i32`.
         HandleLift {
             handle: &'a Handle,
-            name: &'a str,
             ty: TypeId,
         } : [1] => [1],
 
@@ -367,14 +363,12 @@ def_instruction! {
         /// Converts a language-specific record-of-bools to a list of `i32`.
         FlagsLower {
             flags: &'a Flags,
-            name: &'a str,
             ty: TypeId,
         } : [1] => [flags.repr().count()],
         /// Converts a list of native wasm `i32` to a language-specific
         /// record-of-bools.
         FlagsLift {
             flags: &'a Flags,
-            name: &'a str,
             ty: TypeId,
         } : [flags.repr().count()] => [1],
 
@@ -389,7 +383,6 @@ def_instruction! {
         /// from the stack to produce a final variant.
         VariantLift {
             variant: &'a Variant,
-            name: &'a str,
             ty: TypeId,
             discriminant: i32,
             has_value: bool,
@@ -398,14 +391,12 @@ def_instruction! {
         /// Pops an enum off the stack and pushes the `i32` representation.
         EnumLower {
             enum_: &'a Enum,
-            name: &'a str,
             ty: TypeId,
         } : [1] => [1],
 
         /// Loads the specified discriminant into the `enum` specified.
         EnumLift {
             enum_: &'a Enum,
-            name: &'a str,
             ty: TypeId,
             discriminant: i32,
         } : [0] => [1],
@@ -827,11 +818,9 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     }
                 }
                 TypeDefKind::Handle(handle) => {
-                    let (Handle::Own(ty) | Handle::Borrow(ty)) = handle;
                     self.emit(&HandleLower {
                         handle,
                         ty: id,
-                        name: self.resolve.types[*ty].name.as_deref().unwrap(),
                     })
                 }
                 TypeDefKind::Resource => {
@@ -841,7 +830,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.emit(&RecordLower {
                         record,
                         ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
                     })?;
                     let values = self
                         .stack
@@ -869,7 +857,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 TypeDefKind::Flags(flags) => self.emit(&FlagsLower {
                     flags,
                     ty: id,
-                    name: self.resolve.types[id].name.as_ref().unwrap(),
                 }),
 
                 TypeDefKind::Variant(v) => {
@@ -878,7 +865,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 TypeDefKind::Enum(enum_) => self.emit(&EnumLower {
                     enum_,
                     ty: id,
-                    name: self.resolve.types[id].name.as_deref().unwrap(),
                 }),
                 TypeDefKind::Option(t) => self.lower_variant_arm(ty, [None, Some(t)]),
                 TypeDefKind::Result(r) => {
@@ -1020,11 +1006,9 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     }
                 }
                 TypeDefKind::Handle(handle) => {
-                    let (Handle::Own(ty) | Handle::Borrow(ty)) = handle;
                     self.emit(&HandleLift {
                         handle,
                         ty: id,
-                        name: self.resolve.types[*ty].name.as_deref().unwrap(),
                     })
                 }
                 TypeDefKind::Resource => {
@@ -1046,7 +1030,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.emit(&RecordLift {
                         record,
                         ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
                     })
                 }
                 TypeDefKind::Tuple(tuple) => {
@@ -1067,7 +1050,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 TypeDefKind::Flags(flags) => self.emit(&FlagsLift {
                     flags,
                     ty: id,
-                    name: self.resolve.types[id].name.as_ref().unwrap(),
                 }),
 
                 TypeDefKind::Variant(v) => {
@@ -1076,7 +1058,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.emit(&VariantLift {
                         variant: v,
                         ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
                         discriminant,
                         has_value,
                     })
@@ -1091,7 +1072,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.emit(&EnumLift {
                             enum_,
                             ty: id,
-                            name: self.resolve.types[id].name.as_deref().unwrap(),
                             discriminant: value.get(),
                         })
                     } else {
@@ -1214,7 +1194,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.emit(&RecordLower {
                         record,
                         ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
                     })?;
                     self.write_fields_to_memory(record.fields.iter().map(|f| &f.ty), addr, offset)
                 }
@@ -1416,7 +1395,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.emit(&RecordLift {
                         record,
                         ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
                     })
                 }
 
@@ -1461,7 +1439,6 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.emit(&VariantLift {
                         variant,
                         ty: id,
-                        name: self.resolve.types[id].name.as_deref().unwrap(),
                         discriminant,
                         has_value,
                     })
