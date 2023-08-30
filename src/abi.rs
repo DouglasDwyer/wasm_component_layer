@@ -883,7 +883,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 TypeDefKind::Option(t) => self.lower_variant_arm(ty, [None, Some(t)]),
                 TypeDefKind::Result(r) => {
                     self.lower_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])
-                },
+                }
                 TypeDefKind::Future(_) => todo!("lower future"),
                 TypeDefKind::Stream(_) => todo!("lower stream"),
                 TypeDefKind::Unknown => unreachable!(),
