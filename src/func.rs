@@ -818,7 +818,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::RecordLower {
                 record: _,
-                name: _,
                 ty,
             } => {
                 let official_ty =
@@ -841,7 +840,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::RecordLift {
                 record: _,
-                name: _,
                 ty,
             } => {
                 let official_ty =
@@ -861,7 +859,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::HandleLower {
                 handle,
-                name: _,
                 ty,
             } => match &self.types[ty.index()] {
                 ValueType::Own(_ty) => {
@@ -915,7 +912,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             },
             Instruction::HandleLift {
                 handle,
-                name: _,
                 ty,
             } => match &self.types[ty.index()] {
                 ValueType::Own(ty) => {
@@ -987,7 +983,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::FlagsLower {
                 flags: _,
-                name: _,
                 ty: _,
             } => {
                 let flags = require_matches!(operands.pop(), Some(Value::Flags(x)), x);
@@ -997,7 +992,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::FlagsLift {
                 flags: _,
-                name: _,
                 ty,
             } => {
                 let flags = require_matches!(&self.types[ty.index()], ValueType::Flags(x), x);
@@ -1063,7 +1057,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::EnumLower {
                 enum_: _,
-                name: _,
                 ty: _,
             } => {
                 let en = require_matches!(operands.pop(), Some(Value::Enum(x)), x);
@@ -1071,7 +1064,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::EnumLift {
                 enum_: _,
-                name: _,
                 ty,
                 discriminant,
             } => {
