@@ -1075,12 +1075,16 @@ impl Linker {
     }
 
     /// Gets an immutable iterator over all instances defined in this linker.
-    pub fn instances(&self) -> impl ExactSizeIterator<Item = (&'_ InterfaceIdentifier, &'_ LinkerInstance)> {
+    pub fn instances(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&'_ InterfaceIdentifier, &'_ LinkerInstance)> {
         self.instances.iter()
     }
 
     /// Gets a mutable iterator over all instances defined in this linker.
-    pub fn instances_mut(&mut self) -> impl ExactSizeIterator<Item = (&'_ InterfaceIdentifier, &'_ mut LinkerInstance)> {
+    pub fn instances_mut(
+        &mut self,
+    ) -> impl ExactSizeIterator<Item = (&'_ InterfaceIdentifier, &'_ mut LinkerInstance)> {
         self.instances.iter_mut()
     }
 
@@ -1150,9 +1154,7 @@ impl LinkerInstance {
 
     /// Iterates over all associated functions by name.
     pub fn funcs(&self) -> impl Iterator<Item = (&'_ str, crate::func::Func)> {
-        self.functions
-            .iter()
-            .map(|(k, v)| (&**k, v.clone()))
+        self.functions.iter().map(|(k, v)| (&**k, v.clone()))
     }
 
     /// Iterates over all associated functions by name.
@@ -1847,9 +1849,7 @@ impl Exports {
     }
 
     /// Gets an iterator over all instances by identifier.
-    pub fn instances(
-        &self,
-    ) -> impl Iterator<Item = (&'_ InterfaceIdentifier, &'_ ExportInstance)> {
+    pub fn instances(&self) -> impl Iterator<Item = (&'_ InterfaceIdentifier, &'_ ExportInstance)> {
         self.instances.iter()
     }
 }
