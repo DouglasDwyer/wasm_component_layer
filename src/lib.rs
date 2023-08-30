@@ -988,10 +988,9 @@ impl ComponentTypes {
     }
 
     /// Gets an iterator over all instances by identifier.
-    #[allow(clippy::needless_lifetimes)]
-    pub fn instances<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ComponentTypesInstance)> {
+    pub fn instances(
+        &self,
+    ) -> impl Iterator<Item = (&'_ InterfaceIdentifier, &'_ ComponentTypesInstance)> {
         self.instances.iter()
     }
 }
@@ -1075,6 +1074,16 @@ impl Linker {
         self.instances.get_mut(name)
     }
 
+    /// Gets an immutable iterator over all instances defined in this linker.
+    pub fn instances(&self) -> impl ExactSizeIterator<Item = (&'_ InterfaceIdentifier, &'_ LinkerInstance)> {
+        self.instances.iter()
+    }
+
+    /// Gets a mutable iterator over all instances defined in this linker.
+    pub fn instances_mut(&mut self) -> impl ExactSizeIterator<Item = (&'_ InterfaceIdentifier, &'_ mut LinkerInstance)> {
+        self.instances.iter_mut()
+    }
+
     /// Instantiates a component for the provided store, filling in its imports with externals
     /// defined in this linker. All imports must be defined for instantiation to succeed.
     pub fn instantiate(&self, ctx: impl AsContextMut, component: &Component) -> Result<Instance> {
@@ -1137,6 +1146,18 @@ impl LinkerInstance {
     /// Gets the resource in this interface with the given name, if any.
     pub fn resource(&self, name: impl AsRef<str>) -> Option<ResourceType> {
         self.resources.get(name.as_ref()).cloned()
+    }
+
+    /// Iterates over all associated functions by name.
+    pub fn funcs(&self) -> impl Iterator<Item = (&'_ str, crate::func::Func)> {
+        self.functions
+            .iter()
+            .map(|(k, v)| (&**k, v.clone()))
+    }
+
+    /// Iterates over all associated functions by name.
+    pub fn resources(&self) -> impl Iterator<Item = (&'_ str, ResourceType)> {
+        self.resources.iter().map(|(k, v)| (&**k, v.clone()))
     }
 }
 
@@ -1826,10 +1847,9 @@ impl Exports {
     }
 
     /// Gets an iterator over all instances by identifier.
-    #[allow(clippy::needless_lifetimes)]
-    pub fn instances<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = (&'a InterfaceIdentifier, &'a ExportInstance)> {
+    pub fn instances(
+        &self,
+    ) -> impl Iterator<Item = (&'_ InterfaceIdentifier, &'_ ExportInstance)> {
         self.instances.iter()
     }
 }
