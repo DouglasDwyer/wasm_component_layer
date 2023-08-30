@@ -51,8 +51,6 @@ pub enum ValueType {
     Variant(VariantType),
     /// The enum which may be one of multiple cases type.
     Enum(EnumType),
-    /// The union which may be one of multiple types type.
-    Union(UnionType),
     /// The type which may or may not have an underlying value type.
     Option(OptionType),
     /// The type that indicates success or failure type.
@@ -147,9 +145,6 @@ impl ValueType {
                     None => None,
                 },
             )),
-            wit_parser::TypeDefKind::Union(x) => {
-                Self::Union(UnionType::from_component(name, x, component, resource_map)?)
-            }
             wit_parser::TypeDefKind::List(x) => Self::List(ListType::new(Self::from_component(
                 x,
                 component,
@@ -537,70 +532,6 @@ impl PartialEq for EnumType {
 impl Eq for EnumType {}
 
 impl Hash for EnumType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.cases.hash(state)
-    }
-}
-
-/// A type that has multiple possible states, each with an associated type.
-#[derive(Clone, Debug)]
-pub struct UnionType {
-    /// The cases for this union.
-    cases: Arc<[ValueType]>,
-    /// The name of the type.
-    name: Option<TypeIdentifier>,
-}
-
-impl UnionType {
-    /// Creates a new union type from the given list of value types.
-    pub fn new(
-        name: Option<TypeIdentifier>,
-        cases: impl IntoIterator<Item = ValueType>,
-    ) -> Result<Self> {
-        let res = Self {
-            name,
-            cases: cases.into_iter().collect(),
-        };
-
-        Ok(res)
-    }
-
-    /// Gets the name of this type, if any.
-    pub fn name(&self) -> Option<&TypeIdentifier> {
-        self.name.as_ref()
-    }
-
-    /// The cases of this union.
-    pub fn cases(&self) -> &[ValueType] {
-        &self.cases
-    }
-
-    /// Creates a new type from the given component.
-    fn from_component(
-        name: Option<TypeIdentifier>,
-        ty: &wit_parser::Union,
-        component: &ComponentInner,
-        resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
-    ) -> Result<Self> {
-        let cases = ty
-            .cases
-            .iter()
-            .map(|x| ValueType::from_component(&x.ty, component, resource_map))
-            .collect::<Result<_>>()?;
-
-        Ok(Self { name, cases })
-    }
-}
-
-impl PartialEq for UnionType {
-    fn eq(&self, other: &Self) -> bool {
-        self.cases == other.cases
-    }
-}
-
-impl Eq for UnionType {}
-
-impl Hash for UnionType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.cases.hash(state)
     }

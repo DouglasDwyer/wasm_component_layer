@@ -1029,7 +1029,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 {
                     Value::Variant(x) => (x.discriminant(), x.value()),
                     Value::Enum(x) => (x.discriminant(), None),
-                    Value::Union(x) => (x.discriminant(), Some(x.value())),
                     Value::Option(x) => {
                         (x.is_some().then_some(1).unwrap_or_default(), (*x).clone())
                     }
@@ -1060,20 +1059,6 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     variant_ty.clone(),
                     *discriminant as usize,
                     operands.pop(),
-                )?));
-            }
-            Instruction::UnionLift {
-                union: _,
-                name: _,
-                ty,
-                discriminant,
-            } => {
-                let union_ty = require_matches!(&self.types[ty.index()], ValueType::Union(x), x);
-                let value = require_matches!(operands.pop(), Some(x), x);
-                results.push(Value::Union(crate::values::Union::new(
-                    union_ty.clone(),
-                    *discriminant as usize,
-                    value,
                 )?));
             }
             Instruction::EnumLower {

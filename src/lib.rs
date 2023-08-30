@@ -123,7 +123,7 @@ use crate::require_matches::*;
 pub use crate::types::*;
 pub use crate::types::{FuncType, ValueType, VariantCase};
 pub use crate::values::*;
-pub use crate::values::{Enum, Flags, Record, Tuple, Union, Value, Variant};
+pub use crate::values::{Enum, Flags, Record, Tuple, Value, Variant};
 
 /// A parsed and validated WebAssembly component, which may be used to instantiate [`Instance`]s.
 #[derive(Clone, Debug)]
@@ -840,12 +840,6 @@ impl Component {
                 }
                 if let Some(t1) = &t1.err {
                     Self::connect_resources(resolve, types, t1, &t2.err.unwrap(), map);
-                }
-            }
-            (TypeDefKind::Union(t1), InterfaceType::Union(t2)) => {
-                let t2 = &types[*t2];
-                for (f1, f2) in t1.cases.iter().zip(t2.types.iter()) {
-                    Self::connect_resources(resolve, types, &f1.ty, f2, map);
                 }
             }
             (TypeDefKind::List(t1), InterfaceType::List(t2)) => {

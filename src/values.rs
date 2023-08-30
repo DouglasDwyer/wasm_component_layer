@@ -53,8 +53,6 @@ pub enum Value {
     Variant(Variant),
     /// An enum which may be one of multiple cases.
     Enum(Enum),
-    /// An union which may be one of multiple types.
-    Union(Union),
     /// A type which may or may not have an underlying value.
     Option(OptionValue),
     /// A type that indicates success or failure.
@@ -89,7 +87,6 @@ impl Value {
             Value::Tuple(x) => ValueType::Tuple(x.ty()),
             Value::Variant(x) => ValueType::Variant(x.ty()),
             Value::Enum(x) => ValueType::Enum(x.ty()),
-            Value::Union(x) => ValueType::Union(x.ty()),
             Value::Option(x) => ValueType::Option(x.ty()),
             Value::Result(x) => ValueType::Result(x.ty()),
             Value::Flags(x) => ValueType::Flags(x.ty()),
@@ -543,53 +540,6 @@ impl Enum {
 
     /// Gets the type of this value.
     pub fn ty(&self) -> EnumType {
-        self.ty.clone()
-    }
-}
-
-/// A value that exists in one of multiple possible states, each with an associated type.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Union {
-    /// Determines in which state this value exists.
-    discriminant: u32,
-    /// The value of this union.
-    value: Arc<Value>,
-    /// The type of this union.
-    ty: UnionType,
-}
-
-impl Union {
-    /// Creates a new union for the given discriminant and value. The value's type
-    /// must match the union's type for the selected state.
-    pub fn new(ty: UnionType, discriminant: usize, value: Value) -> Result<Self> {
-        ensure!(
-            discriminant < ty.cases().len(),
-            "Discriminant out-of-range."
-        );
-        ensure!(
-            ty.cases()[discriminant] == value.ty(),
-            "Provided value was of incorrect type."
-        );
-
-        Ok(Self {
-            discriminant: discriminant as u32,
-            value: Arc::new(value),
-            ty,
-        })
-    }
-
-    /// Gets the index that describes in which state this value exists.
-    pub fn discriminant(&self) -> usize {
-        self.discriminant as usize
-    }
-
-    /// Gets the typed value associated with the current state.
-    pub fn value(&self) -> Value {
-        (*self.value).clone()
-    }
-
-    /// Gets the type of this value.
-    pub fn ty(&self) -> UnionType {
         self.ty.clone()
     }
 }
