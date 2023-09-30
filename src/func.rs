@@ -6,7 +6,7 @@ use std::usize;
 
 use bytemuck::*;
 use wasm_runtime_layer::*;
-use wasmtime_environ::component::*;
+use wasmtime_environ::component::StringEncoding;
 
 use crate::abi::{Generator, *};
 use crate::types::{FuncType, ValueType};
