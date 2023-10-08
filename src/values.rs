@@ -1,11 +1,13 @@
 use std::any::*;
 use std::marker::*;
+#[cfg(feature = "serde")]
 use std::mem::*;
 use std::ops::*;
 use std::sync::atomic::*;
 use std::sync::*;
 
 use anyhow::*;
+#[cfg(feature = "serde")]
 use bytemuck::*;
 use private::*;
 #[cfg(feature = "serde")]
@@ -1526,25 +1528,25 @@ mod private {
         /// A list of booleans.
         Bool(Arc<[bool]>),
         /// A list of eight-bit signed integers.
-        S8(#[serde(with = "serialize_specialized")] Arc<[i8]>),
+        S8(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[i8]>),
         /// A list of eight-bit unsigned integers.
-        U8(#[serde(with = "serialize_specialized")] Arc<[u8]>),
+        U8(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[u8]>),
         /// A list of 16-bit signed integers.
-        S16(#[serde(with = "serialize_specialized")] Arc<[i16]>),
+        S16(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[i16]>),
         /// A list of 16-bit unsigned integers.
-        U16(#[serde(with = "serialize_specialized")] Arc<[u16]>),
+        U16(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[u16]>),
         /// A list of 32-bit signed integers.
-        S32(#[serde(with = "serialize_specialized")] Arc<[i32]>),
+        S32(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[i32]>),
         /// A list of 32-bit unsigned integers.
-        U32(#[serde(with = "serialize_specialized")] Arc<[u32]>),
+        U32(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[u32]>),
         /// A list of 64-bit signed integers.
-        S64(#[serde(with = "serialize_specialized")] Arc<[i64]>),
+        S64(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[i64]>),
         /// A list of 64-bit unsigned integers.
-        U64(#[serde(with = "serialize_specialized")] Arc<[u64]>),
+        U64(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[u64]>),
         /// A list of 32-bit floating point numbers.
-        F32(#[serde(with = "serialize_specialized")] Arc<[f32]>),
+        F32(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[f32]>),
         /// A list of 64-bit floating point numbers.
-        F64(#[serde(with = "serialize_specialized")] Arc<[f64]>),
+        F64(#[cfg_attr(feature = "serde", serde(with = "serialize_specialized"))] Arc<[f64]>),
         /// A list of characters.
         Char(Arc<[char]>),
         /// A list of other, non-specialized values.
