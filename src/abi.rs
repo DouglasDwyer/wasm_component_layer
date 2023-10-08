@@ -817,20 +817,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         Ok(())
                     }
                 }
-                TypeDefKind::Handle(handle) => {
-                    self.emit(&HandleLower {
-                        handle,
-                        ty: id,
-                    })
-                }
+                TypeDefKind::Handle(handle) => self.emit(&HandleLower { handle, ty: id }),
                 TypeDefKind::Resource => {
                     todo!();
                 }
                 TypeDefKind::Record(record) => {
-                    self.emit(&RecordLower {
-                        record,
-                        ty: id,
-                    })?;
+                    self.emit(&RecordLower { record, ty: id })?;
                     let values = self
                         .stack
                         .drain(self.stack.len() - record.fields.len()..)
@@ -854,18 +846,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     Ok(())
                 }
 
-                TypeDefKind::Flags(flags) => self.emit(&FlagsLower {
-                    flags,
-                    ty: id,
-                }),
+                TypeDefKind::Flags(flags) => self.emit(&FlagsLower { flags, ty: id }),
 
                 TypeDefKind::Variant(v) => {
                     self.lower_variant_arm(ty, v.cases.iter().map(|c| c.ty.as_ref()))
                 }
-                TypeDefKind::Enum(enum_) => self.emit(&EnumLower {
-                    enum_,
-                    ty: id,
-                }),
+                TypeDefKind::Enum(enum_) => self.emit(&EnumLower { enum_, ty: id }),
                 TypeDefKind::Option(t) => self.lower_variant_arm(ty, [None, Some(t)]),
                 TypeDefKind::Result(r) => {
                     self.lower_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])
@@ -1005,12 +991,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         })
                     }
                 }
-                TypeDefKind::Handle(handle) => {
-                    self.emit(&HandleLift {
-                        handle,
-                        ty: id,
-                    })
-                }
+                TypeDefKind::Handle(handle) => self.emit(&HandleLift { handle, ty: id }),
                 TypeDefKind::Resource => {
                     todo!();
                 }
@@ -1027,10 +1008,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.stack.extend(args.drain(..temp.len()));
                         self.lift(&field.ty)?;
                     }
-                    self.emit(&RecordLift {
-                        record,
-                        ty: id,
-                    })
+                    self.emit(&RecordLift { record, ty: id })
                 }
                 TypeDefKind::Tuple(tuple) => {
                     let mut temp = Vec::new();
@@ -1047,10 +1025,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     }
                     self.emit(&TupleLift { tuple, ty: id })
                 }
-                TypeDefKind::Flags(flags) => self.emit(&FlagsLift {
-                    flags,
-                    ty: id,
-                }),
+                TypeDefKind::Flags(flags) => self.emit(&FlagsLift { flags, ty: id }),
 
                 TypeDefKind::Variant(v) => {
                     let (discriminant, has_value) =
@@ -1191,10 +1166,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 // Decompose the record into its components and then write all
                 // the components into memory one-by-one.
                 TypeDefKind::Record(record) => {
-                    self.emit(&RecordLower {
-                        record,
-                        ty: id,
-                    })?;
+                    self.emit(&RecordLower { record, ty: id })?;
                     self.write_fields_to_memory(record.fields.iter().map(|f| &f.ty), addr, offset)
                 }
                 TypeDefKind::Resource => {
@@ -1392,10 +1364,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         addr,
                         offset,
                     )?;
-                    self.emit(&RecordLift {
-                        record,
-                        ty: id,
-                    })
+                    self.emit(&RecordLift { record, ty: id })
                 }
 
                 TypeDefKind::Tuple(tuple) => {

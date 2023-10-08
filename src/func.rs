@@ -816,10 +816,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             Instruction::ReadI32 { value } => {
                 value.set(require_matches!(operands.pop(), Some(Value::S32(x)), x))
             }
-            Instruction::RecordLower {
-                record: _,
-                ty,
-            } => {
+            Instruction::RecordLower { record: _, ty } => {
                 let official_ty =
                     require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
                 let record = require_matches!(operands.pop(), Some(Value::Record(x)), x);
@@ -838,10 +835,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     results[index] = value;
                 }
             }
-            Instruction::RecordLift {
-                record: _,
-                ty,
-            } => {
+            Instruction::RecordLift { record: _, ty } => {
                 let official_ty =
                     require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
                 ensure!(
@@ -857,10 +851,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 )));
                 operands.clear();
             }
-            Instruction::HandleLower {
-                handle,
-                ty,
-            } => match &self.types[ty.index()] {
+            Instruction::HandleLower { handle, ty } => match &self.types[ty.index()] {
                 ValueType::Own(_ty) => {
                     let def = match handle {
                         Handle::Own(x) => x,
@@ -910,10 +901,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
                 _ => unreachable!(),
             },
-            Instruction::HandleLift {
-                handle,
-                ty,
-            } => match &self.types[ty.index()] {
+            Instruction::HandleLift { handle, ty } => match &self.types[ty.index()] {
                 ValueType::Own(ty) => {
                     let def = match handle {
                         Handle::Own(x) => x,
@@ -981,19 +969,13 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     operands.drain(..),
                 )));
             }
-            Instruction::FlagsLower {
-                flags: _,
-                ty: _,
-            } => {
+            Instruction::FlagsLower { flags: _, ty: _ } => {
                 let flags = require_matches!(operands.pop(), Some(Value::Flags(x)), x);
                 if flags.ty().names().len() > 0 {
                     results.extend(flags.as_u32_list().iter().map(|x| Value::S32(*x as i32)));
                 }
             }
-            Instruction::FlagsLift {
-                flags: _,
-                ty,
-            } => {
+            Instruction::FlagsLift { flags: _, ty } => {
                 let flags = require_matches!(&self.types[ty.index()], ValueType::Flags(x), x);
 
                 let list = match operands.len() {
@@ -1055,10 +1037,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     operands.pop(),
                 )?));
             }
-            Instruction::EnumLower {
-                enum_: _,
-                ty: _,
-            } => {
+            Instruction::EnumLower { enum_: _, ty: _ } => {
                 let en = require_matches!(operands.pop(), Some(Value::Enum(x)), x);
                 results.push(Value::S32(en.discriminant() as i32));
             }

@@ -353,7 +353,8 @@ impl Record {
     pub fn field(&self, field: impl AsRef<str>) -> Option<Value> {
         self.fields
             .iter()
-            .filter(|&(name, _val)| (&**name == field.as_ref())).map(|(_name, val)| val.clone())
+            .filter(|&(name, _val)| (&**name == field.as_ref()))
+            .map(|(_name, val)| val.clone())
             .next()
     }
 
@@ -1556,13 +1557,15 @@ mod private {
         use super::*;
 
         /// Serializes a list specialization in the most efficient way possible.
-        pub fn serialize<S: Serializer, A: Pod>(value: &Arc<[A]>, serializer: S) -> Result<S::Ok, S::Error> {
+        pub fn serialize<S: Serializer, A: Pod>(
+            value: &Arc<[A]>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
             if cfg!(target_endian = "little") || size_of::<A>() == 1 {
                 serializer.serialize_bytes(cast_slice(value))
-            }
-            else {
+            } else {
                 let mut bytes = cast_slice::<_, u8>(value).to_vec();
-                
+
                 for chunk in bytes.chunks_exact_mut(size_of::<A>()) {
                     chunk.reverse();
                 }
@@ -1572,13 +1575,18 @@ mod private {
         }
 
         /// Deserializes a list specialization in the most efficient way possible.
-        pub fn deserialize<'a, D: Deserializer<'a>, A: Pod>(deserializer: D) -> Result<Arc<[A]>, D::Error> {
+        pub fn deserialize<'a, D: Deserializer<'a>, A: Pod>(
+            deserializer: D,
+        ) -> Result<Arc<[A]>, D::Error> {
             use serde::de::*;
 
             let mut byte_data = Arc::<[u8]>::deserialize(deserializer)?;
 
             if !(cfg!(target_endian = "little") || size_of::<A>() == 1) {
-                for chunk in Arc::get_mut(&mut byte_data).expect("Could not get exclusive reference.").chunks_exact_mut(size_of::<A>()) {
+                for chunk in Arc::get_mut(&mut byte_data)
+                    .expect("Could not get exclusive reference.")
+                    .chunks_exact_mut(size_of::<A>())
+                {
                     chunk.reverse();
                 }
             }
