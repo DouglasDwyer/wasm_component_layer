@@ -353,7 +353,7 @@ impl Record {
     pub fn field(&self, field: impl AsRef<str>) -> Option<Value> {
         self.fields
             .iter()
-            .filter_map(|(name, val)| (&**name == field.as_ref()).then(|| val.clone()))
+            .filter(|&(name, _val)| (&**name == field.as_ref())).map(|(_name, val)| val.clone())
             .next()
     }
 
@@ -1558,10 +1558,10 @@ mod private {
         /// Serializes a list specialization in the most efficient way possible.
         pub fn serialize<S: Serializer, A: Pod>(value: &Arc<[A]>, serializer: S) -> Result<S::Ok, S::Error> {
             if cfg!(target_endian = "little") || size_of::<A>() == 1 {
-                serializer.serialize_bytes(cast_slice(&value))
+                serializer.serialize_bytes(cast_slice(value))
             }
             else {
-                let mut bytes = cast_slice::<_, u8>(&value).iter().copied().collect::<Vec<_>>();
+                let mut bytes = cast_slice::<_, u8>(value).to_vec();
                 
                 for chunk in bytes.chunks_exact_mut(size_of::<A>()) {
                     chunk.reverse();
