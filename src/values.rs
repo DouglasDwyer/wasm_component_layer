@@ -1,12 +1,15 @@
 use std::any::*;
 use std::marker::*;
-
+use std::mem::*;
 use std::ops::*;
 use std::sync::atomic::*;
 use std::sync::*;
 
 use anyhow::*;
+use bytemuck::*;
 use private::*;
+#[cfg(feature = "serde")]
+use serde::*;
 
 use crate::require_matches::require_matches;
 use crate::types::*;
@@ -16,6 +19,7 @@ use crate::TypeIdentifier;
 
 /// Represents a component model type.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Value {
     /// A boolean value.
     Bool(bool),
@@ -159,6 +163,7 @@ impl_primitive_from!((bool, Bool)(i8, S8)(u8, U8)(i16, S16)(u16, U16)(i32, S32)(
 
 /// Represents a list of values, all of the same type.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct List {
     /// The underlying representation of the list.
     values: ListSpecialization,
@@ -284,6 +289,7 @@ impl<T: ListPrimitive> From<Arc<[T]>> for List {
 
 /// An unordered collection of named fields, each associated with the values.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Record {
     /// The internal set of keys and values, ordered lexicographically.
     fields: Arc<[(Arc<str>, Value)]>,
@@ -381,6 +387,7 @@ impl PartialEq for Record {
 
 /// An ordered, unnamed sequence of heterogenously-typed values.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Tuple {
     /// The fields of this tuple.
     fields: Arc<[Value]>,
@@ -466,6 +473,7 @@ impl<'a> IntoIterator for &'a Tuple {
 /// A value that exists in one of multiple possible states. Each state may optionally
 /// have a type associated with it.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Variant {
     /// Determines in which state this value exists.
     discriminant: u32,
@@ -512,6 +520,7 @@ impl Variant {
 
 /// A value that may exist in one of multiple possible states.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Enum {
     /// Determines in which state this value exists.
     discriminant: u32,
@@ -546,6 +555,7 @@ impl Enum {
 
 /// Represents a value or lack thereof.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct OptionValue {
     /// The type of this option.
     ty: OptionType,
@@ -585,6 +595,7 @@ impl Deref for OptionValue {
 
 /// Denotes a successful or unsuccessful operation, associated optionally with types.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ResultValue {
     /// The type of this result.
     ty: ResultType,
@@ -625,6 +636,7 @@ impl Deref for ResultValue {
 
 /// A finite set of boolean flags that may be `false` or `true`.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Flags {
     /// The type of this flags list.
     ty: FlagsType,
@@ -724,6 +736,7 @@ impl Flags {
 
 /// Internally represents a set of bitflags.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub(crate) enum FlagsList {
     /// A group of bitflags less than or equal to one `u32` in length.
     Single(u32),
@@ -929,6 +942,22 @@ impl PartialEq for ResourceOwn {
     }
 }
 
+#[cfg(feature = "serde")]
+impl Serialize for ResourceOwn {
+    fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::*;
+        std::result::Result::Err(S::Error::custom("Cannot serialize resources."))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'a> Deserialize<'a> for ResourceOwn {
+    fn deserialize<D: Deserializer<'a>>(_: D) -> Result<Self, D::Error> {
+        use serde::de::*;
+        std::result::Result::Err(D::Error::custom("Cannot deserialize resources."))
+    }
+}
+
 /// Represents a resource that is borrowed by the host. If this borrow originated from a host-owned resource,
 /// then it must be manually released via [`ResourceBorrow::drop`], or the owned resource will be considered
 /// borrowed indefinitely.
@@ -1030,6 +1059,22 @@ impl ResourceBorrow {
 impl PartialEq for ResourceBorrow {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.dead, &other.dead)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for ResourceBorrow {
+    fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::*;
+        std::result::Result::Err(S::Error::custom("Cannot serialize resources."))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'a> Deserialize<'a> for ResourceBorrow {
+    fn deserialize<D: Deserializer<'a>>(_: D) -> Result<Self, D::Error> {
+        use serde::de::*;
+        std::result::Result::Err(D::Error::custom("Cannot deserialize resources."))
     }
 }
 
@@ -1154,6 +1199,33 @@ impl<T: ComponentType> ComponentType for Box<T> {
 
     fn into_value(self) -> Result<Value> {
         Ok(T::into_value(*self)?)
+    }
+}
+
+impl ComponentType for Result<(), ()> {
+    fn ty() -> ValueType {
+        ValueType::Result(ResultType::new(None, None))
+    }
+
+    fn from_value(value: &Value) -> Result<Self> {
+        match &**require_matches!(value, Value::Result(x), x) {
+            std::result::Result::Ok(None) => Ok(std::result::Result::Ok(())),
+            std::result::Result::Err(None) => Ok(std::result::Result::Err(())),
+            _ => bail!("Incorrect result type."),
+        }
+    }
+
+    fn into_value(self) -> Result<Value> {
+        match self {
+            std::result::Result::Ok(()) => Ok(Value::Result(ResultValue::new(
+                ResultType::new(None, None),
+                std::result::Result::Ok(None),
+            )?)),
+            std::result::Result::Err(()) => Ok(Value::Result(ResultValue::new(
+                ResultType::new(None, None),
+                std::result::Result::Err(None),
+            )?)),
+        }
     }
 }
 
@@ -1448,33 +1520,71 @@ mod private {
 
     /// The inner backing for a list, specialized over primitive types for efficient access.
     #[derive(Clone, Debug, PartialEq)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub enum ListSpecialization {
         /// A list of booleans.
         Bool(Arc<[bool]>),
         /// A list of eight-bit signed integers.
-        S8(Arc<[i8]>),
+        S8(#[serde(with = "serialize_specialized")] Arc<[i8]>),
         /// A list of eight-bit unsigned integers.
-        U8(Arc<[u8]>),
+        U8(#[serde(with = "serialize_specialized")] Arc<[u8]>),
         /// A list of 16-bit signed integers.
-        S16(Arc<[i16]>),
+        S16(#[serde(with = "serialize_specialized")] Arc<[i16]>),
         /// A list of 16-bit unsigned integers.
-        U16(Arc<[u16]>),
+        U16(#[serde(with = "serialize_specialized")] Arc<[u16]>),
         /// A list of 32-bit signed integers.
-        S32(Arc<[i32]>),
+        S32(#[serde(with = "serialize_specialized")] Arc<[i32]>),
         /// A list of 32-bit unsigned integers.
-        U32(Arc<[u32]>),
+        U32(#[serde(with = "serialize_specialized")] Arc<[u32]>),
         /// A list of 64-bit signed integers.
-        S64(Arc<[i64]>),
+        S64(#[serde(with = "serialize_specialized")] Arc<[i64]>),
         /// A list of 64-bit unsigned integers.
-        U64(Arc<[u64]>),
+        U64(#[serde(with = "serialize_specialized")] Arc<[u64]>),
         /// A list of 32-bit floating point numbers.
-        F32(Arc<[f32]>),
+        F32(#[serde(with = "serialize_specialized")] Arc<[f32]>),
         /// A list of 64-bit floating point numbers.
-        F64(Arc<[f64]>),
+        F64(#[serde(with = "serialize_specialized")] Arc<[f64]>),
         /// A list of characters.
         Char(Arc<[char]>),
         /// A list of other, non-specialized values.
         Other(Arc<[Value]>),
+    }
+
+    #[cfg(feature = "serde")]
+    /// Allows a list specialization to be serialized in the most efficient way possible.
+    mod serialize_specialized {
+        use super::*;
+
+        /// Serializes a list specialization in the most efficient way possible.
+        pub fn serialize<S: Serializer, A: Pod>(value: &Arc<[A]>, serializer: S) -> Result<S::Ok, S::Error> {
+            if cfg!(target_endian = "little") || size_of::<A>() == 1 {
+                serializer.serialize_bytes(cast_slice(&value))
+            }
+            else {
+                let mut bytes = cast_slice::<_, u8>(&value).iter().copied().collect::<Vec<_>>();
+                
+                for chunk in bytes.chunks_exact_mut(size_of::<A>()) {
+                    chunk.reverse();
+                }
+
+                serializer.serialize_bytes(&bytes)
+            }
+        }
+
+        /// Deserializes a list specialization in the most efficient way possible.
+        pub fn deserialize<'a, D: Deserializer<'a>, A: Pod>(deserializer: D) -> Result<Arc<[A]>, D::Error> {
+            use serde::de::*;
+
+            let mut byte_data = Arc::<[u8]>::deserialize(deserializer)?;
+
+            if !(cfg!(target_endian = "little") || size_of::<A>() == 1) {
+                for chunk in Arc::get_mut(&mut byte_data).expect("Could not get exclusive reference.").chunks_exact_mut(size_of::<A>()) {
+                    chunk.reverse();
+                }
+            }
+
+            try_cast_slice_arc(byte_data).map_err(|(x, _)| D::Error::custom(x))
+        }
     }
 
     impl<'a> IntoIterator for &'a ListSpecialization {

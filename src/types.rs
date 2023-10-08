@@ -6,6 +6,8 @@ use std::sync::*;
 use anyhow::*;
 use fxhash::*;
 use id_arena::*;
+#[cfg(feature = "serde")]
+use serde::*;
 
 use crate::require_matches;
 use crate::values::ComponentType;
@@ -14,6 +16,7 @@ use crate::{AsContextMut, ComponentInner, StoreContextMut};
 
 /// Represents a component model interface type.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum ValueType {
     /// The boolean type.
     Bool,
@@ -160,6 +163,7 @@ impl ValueType {
 
 /// Describes the type of a list of values, all of the same type.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ListType {
     /// The element of the list.
     element: Arc<ValueType>,
@@ -181,6 +185,7 @@ impl ListType {
 
 /// Describes the type of an unordered collection of named fields, each associated with the values.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RecordType {
     /// The fields of the record.
     pub(crate) fields: Arc<[(usize, Arc<str>, ValueType)]>,
@@ -304,6 +309,7 @@ impl Hash for RecordType {
 
 /// Describes the type of an ordered, unnamed sequence of heterogenously-typed values.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TupleType {
     /// The types of the tuple fields.
     fields: Arc<[ValueType]>,
@@ -362,6 +368,7 @@ impl Hash for TupleType {
 
 /// Describes a single branch of a variant.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct VariantCase {
     /// The name of this case.
     name: Arc<str>,
@@ -392,6 +399,7 @@ impl VariantCase {
 /// Describes a type has multiple possible states. Each state may optionally
 /// have a type associated with it.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct VariantType {
     /// The cases of this variant.
     cases: Arc<[VariantCase]>,
@@ -473,6 +481,7 @@ impl Hash for VariantType {
 
 /// A type that has multiple possible states.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct EnumType {
     /// The cases of the enum.
     cases: Arc<[Arc<str>]>,
@@ -539,6 +548,7 @@ impl Hash for EnumType {
 
 /// A type that may also be the absence of anything.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct OptionType {
     /// The type of this option when something exists.
     ty: Arc<ValueType>,
@@ -558,6 +568,7 @@ impl OptionType {
 
 /// A type that denotes successful or unsuccessful operation.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ResultType {
     /// The types associated with the result variant.
     ok_err: Arc<(Option<ValueType>, Option<ValueType>)>,
@@ -584,6 +595,7 @@ impl ResultType {
 
 /// A type that denotes a set of named bitflags.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FlagsType {
     /// The names of each flags.
     names: Arc<[Arc<str>]>,
@@ -812,6 +824,22 @@ impl ResourceType {
     /// Determines whether this is an instantiated or host resource.
     pub(crate) fn is_instantiated(&self) -> bool {
         !matches!(&self.kind, ResourceKindValue::Abstract { .. })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl Serialize for ResourceType {
+    fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::*;
+        std::result::Result::Err(S::Error::custom("Cannot serialize resources."))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'a> Deserialize<'a> for ResourceType {
+    fn deserialize<D: Deserializer<'a>>(_: D) -> Result<Self, D::Error> {
+        use serde::de::*;
+        std::result::Result::Err(D::Error::custom("Cannot deserialize resources."))
     }
 }
 

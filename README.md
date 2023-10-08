@@ -66,9 +66,9 @@ pub fn main() {
 }
 ```
 
-## Features
+## Supported capabilities
 
-`wasm_component_layer` supports the following major features:
+`wasm_component_layer` supports the following major capabilities:
 
 - Parsing and instantiating WASM component binaries
 - Runtime generation of component interface types
@@ -77,9 +77,13 @@ pub fn main() {
 - Support for guest resources
 - Support for strongly-typed host resources with destructors
 
-The following features have yet to be implemented:
+The following things have yet to be implemented:
 
 - String transcoders
 - A macro for generating host bindings
 - More comprehensive tests
 - Subtyping
+
+## Optional features
+
+**serde** - Allows for the serialization of identifiers, types, and values. Note that serializing resources is not allowed, because resources may be tied to specific instances.

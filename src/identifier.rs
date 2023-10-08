@@ -1,10 +1,13 @@
 use std::sync::*;
 
 use anyhow::*;
+#[cfg(feature = "serde")]
+use serde::*;
 use wit_parser::*;
 
 /// Describes the name of a component type.
 #[derive(Clone, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TypeIdentifier {
     /// The name of the type.
     name: Arc<str>,
@@ -50,6 +53,7 @@ impl std::fmt::Display for TypeIdentifier {
 
 /// Uniquely identifies a WASM package within a registry.
 #[derive(Clone, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PackageName {
     /// The namespace of the package.
     namespace: Arc<str>,
@@ -108,6 +112,7 @@ impl std::fmt::Display for PackageName {
 
 /// Uniquely identifies a WASM package within a registry, with an optionally-associated version.
 #[derive(Clone, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PackageIdentifier {
     /// The name of the package.
     name: PackageName,
@@ -195,6 +200,7 @@ impl std::fmt::Display for PackageIdentifier {
 
 /// Uniquely identifies a component model interface within a package.
 #[derive(Clone, Hash, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct InterfaceIdentifier {
     /// The package ID.
     package: PackageIdentifier,

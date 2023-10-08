@@ -1,6 +1,6 @@
 [package]
 name = "wasm_component_layer"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/DouglasDwyer/wasm_component_layer"
@@ -16,11 +16,16 @@ fxhash = "0.2.1"
 id-arena = { version = "2.2.1", default-features = false }
 ref-cast = { version = "1.0.19", default-features = false }
 semver = { version = "1.0.18", default-features = false }
+serde = { version = "1.0.188", optional = true, default-features = false, features = [ "derive", "rc" ] }
 slab = { version = "0.4.9", default-features = false }
 wasm_runtime_layer = { version = ">=0.1.4", default-features = false }
 wasmtime-environ = { version = ">=13.0.0", features = [ "component-model" ] }
 wit-component = { version = ">=0.14.4", default-features = false }
 wit-parser = { version = ">=0.11.3", default-features = false }
+
+[features]
+default = [ "serde" ]
+serde = [ "dep:serde", "semver/serde" ]
 
 [dev-dependencies]
 wasmi = "0.31.0"
