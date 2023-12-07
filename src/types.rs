@@ -10,9 +10,9 @@ use id_arena::*;
 #[cfg(feature = "serde")]
 use serde::*;
 
-use crate::require_matches;
 use crate::values::ComponentType;
 use crate::TypeIdentifier;
+use crate::{require_matches, UnaryComponentType};
 use crate::{AsContextMut, ComponentInner, StoreContextMut};
 
 /// Represents a component model interface type.
@@ -1075,8 +1075,9 @@ impl Display for FuncType {
         write!(f, "func(")?;
         for param in params {
             if !first {
-                first = false;
                 write!(f, ", ")?;
+            } else {
+                first = false;
             }
             write!(f, "{param}")?;
         }
@@ -1217,7 +1218,7 @@ impl ComponentList for () {
     }
 }
 
-impl<T: ComponentType> ComponentList for T {
+impl<T: UnaryComponentType> ComponentList for T {
     const LEN: usize = 1;
 
     fn into_tys(types: &mut [ValueType]) {

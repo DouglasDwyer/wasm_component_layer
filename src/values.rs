@@ -1517,6 +1517,76 @@ impl<T: ComponentType> ComponentType for Vec<T> {
     }
 }
 
+/// Implements `ComponentType` for tuples
+macro_rules! tuple_impl {
+    ($($idx: tt $ty: ident), *) => {
+        impl<$($ty: ComponentType),*> ComponentType for ($($ty,)*) {
+            fn ty() -> ValueType {
+                ValueType::Tuple(TupleType::new(None, [$(<$ty as ComponentType>::ty(),)*]))
+            }
+
+            fn from_value(value: &Value) -> Result<Self> {
+                Ok(require_matches!(
+                    value,
+                    Value::Tuple(x),
+                    ($(<$ty as ComponentType>::from_value(&x.fields[$idx])?,)*)
+                ))
+            }
+
+            fn into_value(self) -> Result<Value> {
+                Ok(Value::Tuple(Tuple::new(
+                    TupleType::new(None, [$(<$ty as ComponentType>::ty(),)*]),
+                    [$(<$ty as ComponentType>::into_value(self.$idx)?,)*]
+                    // [A::into_value(self.0)?],
+                )?))
+            }
+        }
+    };
+}
+
+tuple_impl! { 0 A }
+tuple_impl! { 0 A, 1 B }
+tuple_impl! { 0 A, 1 B, 2 C }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H }
+
+/// Specialization of a non-tuple component type for disambiguation between multi-value and tuple.
+pub trait UnaryComponentType: ComponentType {}
+
+/// Implements `UnaryComponentType` for a group of types
+macro_rules! impl_unary {
+    ($([$($param: ident: $bound: ident),*] $ty: ty,)*) => {
+        $( impl<$($param: $bound),*> UnaryComponentType for $ty {} )*
+    };
+}
+
+impl_unary!(
+    [] bool,
+    [] i8,
+    [] u8,
+    [] i16,
+    [] u16,
+    [] i32,
+    [] u32,
+    [] i64,
+    [] u64,
+    [] f32,
+    [] f64,
+    [] char,
+    [] String,
+    [] Box<str>,
+    [] Arc<str>,
+    [T: ComponentType] Option<T>,
+    [T: ComponentType] Box<T>,
+    [T: ComponentType] Vec<T>,
+    [T: ComponentType, U: ComponentType] Result<T, U>,
+    [U: ComponentType] Result<(), U>,
+    [T: ComponentType] Result<T, ()>,
+);
+
 /// A module used to hide traits that are implementation details.
 mod private {
     use super::*;
