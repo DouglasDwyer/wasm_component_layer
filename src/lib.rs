@@ -1537,7 +1537,7 @@ impl Instance {
                         let func = Self::get_component_import(component_import, linker)?;
                         ensure!(
                             func.ty() == expected,
-                            "Function import {} had type {:?}, but expected {expected:?}",
+                            "Function import {} had type {}, but expected {expected}",
                             component_import.name,
                             func.ty()
                         );
