@@ -1,4 +1,5 @@
 use std::any::*;
+use std::fmt::Display;
 use std::hash::*;
 use std::sync::atomic::*;
 use std::sync::*;
@@ -9,9 +10,9 @@ use id_arena::*;
 #[cfg(feature = "serde")]
 use serde::*;
 
-use crate::require_matches;
 use crate::values::ComponentType;
 use crate::TypeIdentifier;
+use crate::{require_matches, UnaryComponentType};
 use crate::{AsContextMut, ComponentInner, StoreContextMut};
 
 /// Represents a component model interface type.
@@ -64,6 +65,123 @@ pub enum ValueType {
     Own(ResourceType),
     /// The borrowed resource handle type.
     Borrow(ResourceType),
+}
+
+impl Display for ValueType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValueType::Bool => write!(f, "bool"),
+            ValueType::S8 => write!(f, "s8"),
+            ValueType::U8 => write!(f, "u8"),
+            ValueType::S16 => write!(f, "s16"),
+            ValueType::U16 => write!(f, "u16"),
+            ValueType::S32 => write!(f, "s32"),
+            ValueType::U32 => write!(f, "u32"),
+            ValueType::S64 => write!(f, "s64"),
+            ValueType::U64 => write!(f, "u64"),
+            ValueType::F32 => write!(f, "f32"),
+            ValueType::F64 => write!(f, "f64"),
+            ValueType::Char => write!(f, "char"),
+            ValueType::String => write!(f, "string"),
+            ValueType::List(x) => write!(f, "list<{}>", x.element_ty()),
+            // record<field1: type1, field2: type2, ...>
+            ValueType::Record(x) => {
+                write!(f, "record<")?;
+                let mut first = true;
+                for (name, ty) in x.fields() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", name, ty)?;
+                    first = false;
+                }
+                write!(f, ">")
+            }
+            // tuple<type1, type2, ...>
+            ValueType::Tuple(x) => {
+                write!(f, "tuple<")?;
+                let mut first = true;
+                for ty in x.fields() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ty)?;
+                    first = false;
+                }
+                write!(f, ">")
+            }
+            // variant<case1: type1?, case2: type2?, ...>
+            ValueType::Variant(x) => {
+                write!(f, "variant<")?;
+                let mut first = true;
+                for case in x.cases() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", case.name())?;
+                    if let Some(ty) = case.ty() {
+                        write!(f, ": {}", ty)?;
+                    }
+                    first = false;
+                }
+                write!(f, ">")
+            }
+            // enum<case1, case2, ...>
+            ValueType::Enum(x) => {
+                write!(f, "enum<")?;
+                let mut first = true;
+                for case in x.cases() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", case)?;
+                    first = false;
+                }
+                write!(f, ">")
+            }
+            ValueType::Option(x) => write!(f, "option<{}>", x.some_ty()),
+            ValueType::Result(x) => {
+                write!(f, "result<")?;
+                if let Some(ty) = x.ok_ty() {
+                    write!(f, "{}", ty)?;
+                } else {
+                    write!(f, "unit")?;
+                }
+                write!(f, ", ")?;
+                if let Some(ty) = x.err_ty() {
+                    write!(f, "{}", ty)?;
+                } else {
+                    write!(f, "unit")?;
+                }
+                write!(f, ">")
+            }
+            // flags<flag1, flag2, ...>
+            ValueType::Flags(x) => {
+                write!(f, "flags<")?;
+                let mut first = true;
+                for name in x.names() {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", name)?;
+                    first = false;
+                }
+                write!(f, ">")
+            }
+            // own<type>
+            ValueType::Own(x) => write!(
+                f,
+                "own<{}>",
+                x.name().map(ToString::to_string).unwrap_or("".to_string())
+            ),
+            // borrow<type>
+            ValueType::Borrow(x) => write!(
+                f,
+                "borrow<{}>",
+                x.name().map(ToString::to_string).unwrap_or("".to_string())
+            ),
+        }
+    }
 }
 
 impl ValueType {
@@ -947,6 +1065,42 @@ impl std::fmt::Debug for FuncType {
     }
 }
 
+impl Display for FuncType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params = self.params();
+        let results = self.results();
+
+        let mut first = true;
+
+        write!(f, "func(")?;
+        for param in params {
+            if !first {
+                write!(f, ", ")?;
+            } else {
+                first = false;
+            }
+            write!(f, "{param}")?;
+        }
+
+        write!(f, ")")?;
+
+        let mut first = true;
+
+        for result in results {
+            if !first {
+                write!(f, ", ")?;
+            } else {
+                first = false;
+                write!(f, " -> ")?;
+            }
+
+            write!(f, "{result}")?;
+        }
+
+        std::fmt::Result::Ok(())
+    }
+}
+
 impl FuncType {
     /// Creates this type from the given component.
     pub(crate) fn from_component(
@@ -1064,7 +1218,7 @@ impl ComponentList for () {
     }
 }
 
-impl<T: ComponentType> ComponentList for T {
+impl<T: UnaryComponentType> ComponentList for T {
     const LEN: usize = 1;
 
     fn into_tys(types: &mut [ValueType]) {
