@@ -1537,7 +1537,6 @@ macro_rules! tuple_impl {
                 Ok(Value::Tuple(Tuple::new(
                     TupleType::new(None, [$(<$ty as ComponentType>::ty(),)*]),
                     [$(<$ty as ComponentType>::into_value(self.$idx)?,)*]
-                    // [A::into_value(self.0)?],
                 )?))
             }
         }
