@@ -1548,6 +1548,10 @@ impl Instance {
                             &component_import.func,
                         );
 
+                        // Improve the name
+                        // Due to indirect calls in wasm this function has the name `"0"`, `"1"`, etc, which is only their index in the indirect call table across modules
+                        let ty = ty.with_name(component_import.name.clone());
+
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1560,6 +1564,7 @@ impl Instance {
                     GeneratedTrampoline::ResourceNew(x) => {
                         let x = x.as_u32();
                         let tables = inner.state_table.clone();
+                        let ty = ty.with_name(format!("resource-new-{}", x));
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1584,6 +1589,7 @@ impl Instance {
                     GeneratedTrampoline::ResourceRep(x) => {
                         let x = x.as_u32();
                         let tables = inner.state_table.clone();
+                        let ty = ty.with_name(format!("resource-rep-{}", x));
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1605,6 +1611,7 @@ impl Instance {
                         destructors.push(*x);
                         let x = y.as_u32();
                         let tables = inner.state_table.clone();
+                        let ty = ty.with_name(format!("resource-drop-{}", x));
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1992,7 +1999,8 @@ impl<T, E: backend::WasmEngine> Store<T, E> {
 
         inner.data_mut().drop_host_resource = Some(wasm_runtime_layer::Func::new(
             &mut inner,
-            wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []),
+            wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], [])
+                .with_name("drop-host-resources"),
             |mut ctx, args, _| {
                 if let wasm_runtime_layer::Value::I32(index) = &args[0] {
                     ctx.data_mut().host_resources.remove(*index as usize);
