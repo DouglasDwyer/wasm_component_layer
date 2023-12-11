@@ -836,7 +836,8 @@ impl ResourceType {
         let store_id = ctx.as_context().inner.data().id;
         let destructor = wasm_runtime_layer::Func::new(
             ctx.as_context_mut().inner,
-            wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], []),
+            wasm_runtime_layer::FuncType::new([wasm_runtime_layer::ValueType::I32], [])
+                .with_name("destructor"),
             move |mut ctx, val, _res| {
                 let resource = wasm_runtime_layer::AsContextMut::as_context_mut(&mut ctx)
                     .data_mut()
