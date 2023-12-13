@@ -1041,7 +1041,7 @@ impl Hash for ResourceKindValue {
 /// # Note
 ///
 /// Can be cloned cheaply.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct FuncType {
     /// The number of function parameters.
     len_params: usize,
@@ -1055,13 +1055,24 @@ pub struct FuncType {
     /// The `len_params` field denotes how many parameters there are in
     /// the head of the vector before the results.
     params_results: Arc<[ValueType]>,
+    /// A debug name used for debugging or tracing purposes.
+    name: Option<Arc<str>>,
 }
+
+impl PartialEq for FuncType {
+    fn eq(&self, other: &Self) -> bool {
+        self.params_results == other.params_results && self.len_params == other.len_params
+    }
+}
+
+impl Eq for FuncType {}
 
 impl std::fmt::Debug for FuncType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("FuncType")
             .field("params", &self.params())
             .field("results", &self.results())
+            .field("name", &self.name)
             .finish()
     }
 }
@@ -1073,7 +1084,12 @@ impl Display for FuncType {
 
         let mut first = true;
 
-        write!(f, "func(")?;
+        if let Some(name) = &self.name {
+            write!(f, "func {name}(")?;
+        } else {
+            write!(f, "func(")?;
+        }
+
         for param in params {
             if !first {
                 write!(f, ", ")?;
@@ -1127,6 +1143,7 @@ impl FuncType {
         Ok(Self {
             params_results: params_results.into(),
             len_params,
+            name: None,
         })
     }
 
@@ -1142,7 +1159,14 @@ impl FuncType {
         Self {
             params_results: params_results.into(),
             len_params,
+            name: None,
         }
+    }
+
+    /// Set the name
+    pub fn with_name(mut self, name: impl Into<Arc<str>>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     /// Returns the parameter types of the function type.

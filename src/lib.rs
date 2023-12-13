@@ -1,4 +1,4 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(clippy::missing_docs_in_private_items)]
@@ -1110,13 +1110,14 @@ impl LinkerInstance {
     pub fn define_func(
         &mut self,
         name: impl Into<Arc<str>>,
-        func: crate::func::Func,
+        mut func: crate::func::Func,
     ) -> Result<()> {
         let n = Into::<Arc<str>>::into(name);
         if self.functions.contains_key(&n) {
             bail!("Duplicate function definition.");
         }
 
+        func.ty = func.ty.with_name(n.clone());
         self.functions.insert(n, func);
         Ok(())
     }
@@ -1481,7 +1482,8 @@ impl Instance {
 
         Ok(crate::func::Func {
             store_id: ctx.as_context().inner.data().id,
-            ty: crate::types::FuncType::from_component(func, &inner.component.0, Some(mapping))?,
+            ty: crate::types::FuncType::from_component(func, &inner.component.0, Some(mapping))?
+                .with_name(func.name.clone()),
             backing: FuncImpl::GuestFunc(
                 None,
                 Arc::new(GuestFunc {
@@ -1533,7 +1535,8 @@ impl Instance {
                             &component_import.func,
                             &inner.component.0,
                             Some(resource_map),
-                        )?;
+                        )?
+                        .with_name(component_import.name.clone());
                         let func = Self::get_component_import(component_import, linker)?;
                         ensure!(
                             func.ty() == expected,

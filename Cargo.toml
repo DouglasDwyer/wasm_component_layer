@@ -8,6 +8,7 @@ readme = "README.md"
 description = """
 WebAssembly component model implementation for any backend.
 """
+keywords = ["webassembly", "wasm", "wasmtime", "wasmi", "component-layer"]
 
 [dependencies]
 anyhow = { version = "1.0.75", default-features = false }
@@ -22,6 +23,8 @@ wasm_runtime_layer = { version = ">=0.2.0", default-features = false }
 wasmtime-environ = { version = ">=15.0.1", features = [ "component-model" ] }
 wit-component = { version = ">=0.19.0", default-features = false }
 wit-parser = { version = ">=0.13.0", default-features = false }
+
+tracing = { version = "0.1", optional = true }
 
 [features]
 serde = [ "dep:serde", "semver/serde" ]

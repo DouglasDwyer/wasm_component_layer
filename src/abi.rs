@@ -582,6 +582,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         match self.lift_lower {
             LiftLower::LowerArgsLiftResults => {
                 if !sig.indirect_params {
+                    tracing::debug!(?func.params, "direct params");
                     // If the parameters for this function aren't indirect
                     // (there aren't too many) then we simply do a normal lower
                     // operation for them all.
@@ -590,6 +591,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.lower(ty)?;
                     }
                 } else {
+                    tracing::debug!("indirect params");
                     // ... otherwise if parameters are indirect space is
                     // allocated from them and each argument is lowered
                     // individually into memory.
@@ -747,10 +749,13 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             "not enough operands on stack for {:?}",
             inst
         );
+
+        tracing::debug!(?self.stack, "stack");
         self.operands
             .extend(self.stack.drain((self.stack.len() - operands_len)..));
         self.results.reserve(inst.results_len());
 
+        tracing::debug!(?inst, "emitting");
         self.bindgen
             .emit(self.resolve, inst, &mut self.operands, &mut self.results)?;
 
@@ -1138,10 +1143,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         }
     }
 
-    /// Writes a value to memory.
+    /// Writes a value to memory, such as the newly allocated memory for a list being transferred.
     fn write_to_memory(&mut self, ty: &Type, addr: B::Operand, offset: i32) -> Result<()> {
         use Instruction::*;
 
+        tracing::trace!(?ty);
         match *ty {
             // Builtin types need different flavors of storage instructions
             // depending on the size of the value written.

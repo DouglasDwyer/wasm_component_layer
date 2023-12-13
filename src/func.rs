@@ -92,6 +92,7 @@ impl Func {
         arguments: &[Value],
         results: &mut [Value],
     ) -> Result<()> {
+        let _span = tracing::info_span!("Func::call", ty=%self.ty).entered();
         if ctx.as_context().inner.data().id != self.store_id {
             panic!("Attempted to call function with incorrect store.");
         }
@@ -143,6 +144,8 @@ impl Func {
                     store_id: self.store_id,
                 };
 
+                tracing::debug!("func_bindgen");
+
                 Ok(Generator::new(
                     &component.resolve,
                     AbiVariant::GuestExport,
@@ -158,6 +161,7 @@ impl Func {
                 })?)
             }
             FuncImpl::HostFunc(idx) => {
+                tracing::debug!("host_func");
                 let callee = ctx.as_context().inner.data().host_functions.get(idx);
                 (callee)(ctx.as_context_mut(), arguments, results)?;
                 self.ty.match_results(results)
@@ -676,7 +680,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     wasm_runtime_layer::Value::I32(encoded.len() as i32),
                 ];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
-                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                {
+                    let _span =
+                        tracing::debug_span!("string_realloc", len = encoded.len()).entered();
+                    realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                }
                 let ptr = require_matches!(&res[0], wasm_runtime_layer::Value::I32(x), *x);
 
                 let memory = self.memory.as_ref().expect("No memory.");
@@ -701,7 +709,12 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     wasm_runtime_layer::Value::I32((list.len() * size) as i32),
                 ];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
-                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                {
+                    let _span =
+                        tracing::debug_span!("list_canon_realloc", len = list.len(), size, align)
+                            .entered();
+                    realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                }
                 let ptr = require_matches!(res[0], wasm_runtime_layer::Value::I32(x), x);
 
                 match element {
@@ -738,7 +751,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     wasm_runtime_layer::Value::I32((list.len() * size) as i32),
                 ];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
-                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                {
+                    let _span = tracing::debug_span!("list_realloc", len = list.len(), size, align)
+                        .entered();
+                    realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                }
                 let ptr = require_matches!(res[0], wasm_runtime_layer::Value::I32(x), x);
 
                 len.set(list.len() as i32);
@@ -1079,6 +1096,9 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 )?));
             }
             Instruction::CallWasm { name: _, sig } => {
+                let _span = tracing::debug_span!("CallWasm", operands=?operands).entered();
+
+                // Conversion from primitive component values to the runtime values
                 let args = operands
                     .iter()
                     .map(TryFrom::try_from)
@@ -1159,7 +1179,10 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     wasm_runtime_layer::Value::I32(*size as i32),
                 ];
                 let mut res = [wasm_runtime_layer::Value::I32(0)];
-                realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                {
+                    let _span = tracing::debug_span!("malloc", size, align).entered();
+                    realloc.call(&mut self.ctx.as_context_mut().inner, &args, &mut res)?;
+                }
                 require_matches!(
                     &res[0],
                     wasm_runtime_layer::Value::I32(x),
@@ -1242,6 +1265,7 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
         let mut params_results = vec![Value::Bool(false); P::LEN + R::LEN];
         params.into_values(&mut params_results[0..P::LEN])?;
         let (params, results) = params_results.split_at_mut(P::LEN);
+        tracing::debug!(?params, ?results, "call");
         self.inner.call(ctx, params, results)?;
         R::from_values(results)
     }
