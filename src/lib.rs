@@ -97,6 +97,7 @@ mod require_matches;
 /// Defines all types related to the component model.
 mod types;
 
+pub mod conv;
 /// Provides the ability to instantiate component model types.
 mod values;
 
@@ -110,7 +111,8 @@ use id_arena::*;
 
 use slab::*;
 pub use wasm_runtime_layer::Engine;
-use wasm_runtime_layer::*;
+// use wasm_runtime_layer::*;
+use wasm_runtime_layer::{backend, Extern, ExternType, Global, Imports, Module};
 use wasmtime_environ::component::*;
 use wit_component::*;
 use wit_parser::*;

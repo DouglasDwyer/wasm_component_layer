@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::marker::*;
 use std::mem::*;
 use std::sync::atomic::*;
@@ -5,10 +6,16 @@ use std::sync::*;
 use std::usize;
 
 use bytemuck::*;
+use wasm_runtime_layer::backend::WasmFunc;
+use wasm_runtime_layer::backend::WasmModule;
 use wasm_runtime_layer::*;
 use wasmtime_environ::component::StringEncoding;
 
 use crate::abi::{Generator, *};
+use crate::conv::Lift;
+use crate::conv::LiftContext;
+use crate::conv::Lower;
+use crate::conv::LowerContext;
 use crate::types::{FuncType, ValueType};
 use crate::values::Value;
 use crate::{AsContext, AsContextMut, StoreContextMut, *};
@@ -79,6 +86,80 @@ impl Func {
             ty,
             backing: FuncImpl::HostFunc(idx),
         }
+    }
+
+    /// Calls the function using native rust types.
+    pub fn call_typed<C, Params, Ret>(&self, mut ctx: C, args: Params) -> Result<Ret>
+    where
+        C: AsContextMut,
+        Params: Debug + Lower,
+        Ret: Debug + Lift,
+    {
+        let _span = tracing::info_span!( "Func::call_typed", ty=%self.ty, ?args).entered();
+        if ctx.as_context().inner.data().id != self.store_id {
+            panic!("Attempted to call function with incorrect store.");
+        }
+
+        // let mut arg_list = Vec::new();
+
+        match &self.backing {
+            FuncImpl::GuestFunc(_i, f) => {
+                let types = &f.types;
+                let component = &f.component;
+                // The parsed wit function signature, not to be confused by our `ValueType` loose
+                // coupled function signature, nor the function reference.
+                let function = &f.function;
+
+                let mut flat_args = Vec::new();
+
+                let resolve = &component.resolve;
+                let sig = resolve.wasm_signature(AbiVariant::GuestExport, function);
+
+                tracing::debug!(?function, "function");
+
+                // All arguments fit on the stack
+                if !sig.indirect_params {
+                    // Lower the arguments into the guest memory.
+                    //
+                    // This may in turn call `store` for nested types, ensuring that they land in
+                    // memory
+                    let mut store = ctx.as_context_mut();
+                    args.store_flat(
+                        &mut LowerContext {
+                            store: &mut store,
+                            memory: f.memory.as_ref(),
+                        },
+                        &mut flat_args,
+                    );
+                    tracing::debug!(?flat_args, "flat args");
+
+                    let mut results = vec![wasm_runtime_layer::Value::I32(0)];
+                    f.callee
+                        .call(&mut store.inner, &flat_args, &mut results)
+                        .context("Failed to call guest function")?;
+
+                    let mut cx = LiftContext {
+                        store,
+                        memory: f.memory.as_ref(),
+                    };
+
+                    let ret = Ret::load_flat(
+                        &mut cx,
+                        &mut function.results.iter_types(),
+                        &mut results.into_iter(),
+                    );
+
+                    tracing::debug!(?ret, "got result");
+
+                    return Ok(ret);
+                } else {
+                    todo!("indirect")
+                }
+            }
+            _ => todo!(),
+        }
+
+        todo!()
     }
 
     /// Calls this function, returning an error if:
@@ -342,6 +423,7 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
 
     /// Stores a type to the given offset in guest memory.
     fn store<B: Blittable>(&mut self, offset: usize, value: B) -> Result<()> {
+        tracing::debug!(?self.memory, "memory");
         value.to_bytes().store(
             &mut self.ctx,
             self.memory.as_ref().expect("No memory."),
@@ -1305,7 +1387,7 @@ impl FuncError {
     }
 }
 
-impl std::fmt::Debug for FuncError {
+impl Debug for FuncError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(inter) = &self.interface {
             f.write_fmt(format_args!("in {}.{}: {:?}", inter, self.name, self.error))
