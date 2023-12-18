@@ -6,8 +6,6 @@ use std::sync::*;
 use std::usize;
 
 use bytemuck::*;
-use wasm_runtime_layer::backend::WasmFunc;
-use wasm_runtime_layer::backend::WasmModule;
 use wasm_runtime_layer::*;
 use wasmtime_environ::component::StringEncoding;
 
@@ -104,7 +102,6 @@ impl Func {
 
         match &self.backing {
             FuncImpl::GuestFunc(_i, f) => {
-                let types = &f.types;
                 let component = &f.component;
                 // The parsed wit function signature, not to be confused by our `ValueType` loose
                 // coupled function signature, nor the function reference.
@@ -127,6 +124,7 @@ impl Func {
                     args.store_flat(
                         &mut LowerContext {
                             store: &mut store,
+                            realloc: f.realloc.as_ref(),
                             memory: f.memory.as_ref(),
                         },
                         &mut flat_args,
@@ -151,15 +149,13 @@ impl Func {
 
                     tracing::debug!(?ret, "got result");
 
-                    return Ok(ret);
+                    Ok(ret)
                 } else {
                     todo!("indirect")
                 }
             }
             _ => todo!(),
         }
-
-        todo!()
     }
 
     /// Calls this function, returning an error if:
