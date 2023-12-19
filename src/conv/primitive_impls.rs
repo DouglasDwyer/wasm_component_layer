@@ -39,17 +39,19 @@ impl Lower for i32 {
 
 impl Lift for i32 {
     fn load<E: WasmEngine, T>(
-        cx: LiftContext<'_, '_, E, T>,
+        cx: &mut LiftContext<'_, '_, E, T>,
         _: &Memory,
-        _: Type,
-        ptr: i32,
-    ) -> Self {
+        ty: &mut dyn Iterator<Item = &Type>,
+        ptr: usize,
+    ) -> (Self, usize) {
         let memory = cx.memory.unwrap();
         let mut buf = [0u8; 4];
-        memory.read(cx.store.inner, ptr as usize, &mut buf).unwrap();
+        memory
+            .read(&mut cx.store.inner, ptr as usize, &mut buf)
+            .unwrap();
         let v = i32::from_le_bytes(buf);
         tracing::debug!(?v);
-        v
+        (v, ptr + 4)
     }
 
     fn load_flat<E: WasmEngine, T>(
@@ -76,23 +78,39 @@ impl ComponentType for str {
     }
 }
 
-impl ComponentType for Arc<str> {
-    fn size(&self) -> usize {
-        self.deref().size()
+impl Lift for String {
+    fn load<E: WasmEngine, T>(
+        cx: &mut LiftContext<'_, '_, E, T>,
+        memory: &Memory,
+        ty: &mut dyn Iterator<Item = &Type>,
+        ptr: usize,
+    ) -> (Self, usize) {
+        let ((s_ptr, len), new_ptr) = <(i32, i32)>::load(cx, memory, ty, ptr);
+
+        let mut buf = vec![0u8; len as usize];
+
+        memory.read(&mut cx.store.inner, s_ptr as usize, &mut buf);
+
+        let s = String::from_utf8(buf).expect("Invalid UTF-8");
+
+        (s, new_ptr)
     }
 
-    fn align(&self) -> usize {
-        self.deref().align()
-    }
-}
+    fn load_flat<E: WasmEngine, T>(
+        cx: &mut LiftContext<'_, '_, E, T>,
+        ty: &mut dyn Iterator<Item = &Type>,
+        args: &mut std::vec::IntoIter<wasm_runtime_layer::Value>,
+    ) -> Self {
+        let ptr = i32::load_flat(cx, ty, args);
+        let len = i32::load_flat(cx, ty, args);
 
-impl ComponentType for String {
-    fn size(&self) -> usize {
-        self.deref().size()
-    }
+        let memory = cx.memory.unwrap();
 
-    fn align(&self) -> usize {
-        self.deref().align()
+        let mut buf = vec![0u8; len as usize];
+
+        memory.read(&mut cx.store.inner, ptr as _, &mut buf);
+
+        String::from_utf8(buf).expect("Invalid UTF-8")
     }
 }
 
@@ -128,46 +146,48 @@ impl Lower for str {
     }
 }
 
-impl Lower for Arc<str> {
-    fn store<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        memory: &Memory,
-        ptr: usize,
-    ) -> usize {
-        self.deref().store(cx, memory, ptr)
-    }
+macro_rules! auto_impl {
+    ($ty: ty, [$($t: tt),*] $ptr: ty) => {
 
-    fn store_flat<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        dst: &mut Vec<wasm_runtime_layer::Value>,
-    ) {
-        self.deref().store_flat(cx, dst)
-    }
+        impl<$($t,)*> ComponentType for $ptr {
+            fn size(&self) -> usize {
+                self.deref().size()
+            }
+
+            fn align(&self) -> usize {
+                self.deref().align()
+            }
+        }
+
+        impl<$($t,)*> Lower for $ptr {
+            fn store<E: WasmEngine, T>(
+                &self,
+                cx: &mut LowerContext<'_, '_, E, T>,
+                memory: &Memory,
+                ptr: usize,
+            ) -> usize {
+                self.deref().store(cx, memory, ptr)
+            }
+
+            fn store_flat<E: WasmEngine, T>(
+                &self,
+                cx: &mut LowerContext<'_, '_, E, T>,
+                dst: &mut Vec<wasm_runtime_layer::Value>,
+            ) {
+                self.deref().store_flat(cx, dst)
+            }
+        }
+    };
+    ($ty: ty => $([$($t: tt),*] $ptr: ty),*) => {
+        $(auto_impl!($ty, [$($t),*] $ptr);)*
+    };
 }
 
-impl Lower for String {
-    fn store<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        memory: &Memory,
-        ptr: usize,
-    ) -> usize {
-        self.deref().store(cx, memory, ptr)
-    }
-
-    fn store_flat<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        dst: &mut Vec<wasm_runtime_layer::Value>,
-    ) {
-        self.deref().store_flat(cx, dst)
-    }
-}
+auto_impl! { str => [] String, [] Box<str>, [] Arc<str>, [] &str }
+auto_impl! { V => [V] Box<V>, [V] Arc<V>, [V] &V }
 
 /// Allocate a block of memory in the guest for string and list lowering
-fn alloc_list<E: WasmEngine, T>(
+pub(crate) fn alloc_list<E: WasmEngine, T>(
     cx: &mut LowerContext<'_, '_, E, T>,
     size: i32,
     align: i32,
@@ -175,7 +195,7 @@ fn alloc_list<E: WasmEngine, T>(
     let mut res = [wasm_runtime_layer::Value::I32(0)];
     cx.realloc.unwrap().call(
         &mut cx.store.inner,
-        // old_ptr, old_len, align, new_len
+        // old_ptrmut , old_len, align, new_len
         &[
             Value::I32(0),
             Value::I32(0),

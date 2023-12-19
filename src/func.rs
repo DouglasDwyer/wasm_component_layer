@@ -137,19 +137,41 @@ impl Func {
                         .context("Failed to call guest function")?;
 
                     let mut cx = LiftContext {
+                        types: &f.types,
+                        resolve: &resolve,
                         store,
                         memory: f.memory.as_ref(),
                     };
 
-                    let ret = Ret::load_flat(
-                        &mut cx,
-                        &mut function.results.iter_types(),
-                        &mut results.into_iter(),
-                    );
+                    if sig.retptr {
+                        let Some(wasm_runtime_layer::Value::I32(retptr)) = results.pop() else {
+                            panic!("Invalid return value")
+                        };
 
-                    tracing::debug!(?ret, "got result");
+                        let memory = f.memory.as_ref().unwrap();
 
-                    Ok(ret)
+                        tracing::debug!("{:?}", function.results.iter_types().collect::<Vec<_>>());
+
+                        let (ret, ptr) = Ret::load(
+                            &mut cx,
+                            memory,
+                            &mut function.results.iter_types(),
+                            retptr as _,
+                        );
+
+                        tracing::debug!(?retptr, ?ptr);
+
+                        Ok(ret)
+                    } else {
+                        let ret = Ret::load_flat(
+                            &mut cx,
+                            &mut function.results.iter_types(),
+                            &mut results.into_iter(),
+                        );
+
+                        tracing::debug!(?ret, "got result");
+                        Ok(ret)
+                    }
                 } else {
                     todo!("indirect")
                 }
@@ -1522,7 +1544,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
         let old = replace(&mut self.functions, Vec::with_capacity(new_len));
         for (idx, val) in old {
             if Arc::strong_count(&idx) > 1 {
-                idx.store(self.functions.len(), Ordering::Release);
+                AtomicUsize::store(&*idx, self.functions.len(), Ordering::Release);
                 self.functions.push((idx, val));
             }
         }

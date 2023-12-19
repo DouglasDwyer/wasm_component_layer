@@ -1,11 +1,11 @@
 //! Conversion between guest and host types
 
-use std::vec;
+use std::{slice, vec};
 
 use wasm_runtime_layer::{backend::WasmEngine, Func, Memory};
-use wit_parser::Type;
+use wit_parser::{Resolve, Type};
 
-use crate::{StoreContextMut, Value};
+use crate::{require_matches::require_matches, StoreContextMut, Tuple, Value, ValueType};
 
 /// Implementation for native rust types
 mod primitive_impls;
@@ -32,11 +32,13 @@ pub trait Lift: ComponentType {
     /// `ty` is used to infer the type to load for dynamically typed destination types, such as
     /// [`Value`].
     fn load<E: WasmEngine, T>(
-        cx: LiftContext<'_, '_, E, T>,
+        cx: &mut LiftContext<'_, '_, E, T>,
         memory: &Memory,
-        ty: Type,
-        ptr: i32,
-    ) -> Self;
+        ty: &mut dyn Iterator<Item = &Type>,
+        ptr: usize,
+    ) -> (Self, usize)
+    where
+        Self: Sized;
 
     /// Reads the value from flat arguments
     ///
@@ -113,13 +115,56 @@ impl Lower for Value {
 
 impl Lift for Value {
     fn load<E: WasmEngine, T>(
-        cx: LiftContext<'_, '_, E, T>,
+        cx: &mut LiftContext<'_, '_, E, T>,
         memory: &Memory,
-        ty: Type,
-        ptr: i32,
-    ) -> Self {
-        match ty {
-            Type::S32 => Value::S32(i32::load(cx, memory, ty, ptr)),
+        ty: &mut dyn Iterator<Item = &Type>,
+        ptr: usize,
+    ) -> (Self, usize) {
+        match ty.next().unwrap() {
+            Type::S32 => {
+                let (v, ptr) = i32::load(cx, memory, ty, ptr);
+                (Value::S32(v), ptr)
+            }
+            Type::String => {
+                let (v, ptr) = String::load(cx, memory, ty, ptr);
+                (Value::String(v.into()), ptr)
+            }
+            Type::Id(id) => {
+                let ty = &cx.resolve.types[*id];
+                match &ty.kind {
+                    wit_parser::TypeDefKind::Record(_) => todo!(),
+                    wit_parser::TypeDefKind::Resource => todo!(),
+                    wit_parser::TypeDefKind::Handle(_) => todo!(),
+                    wit_parser::TypeDefKind::Flags(_) => todo!(),
+                    wit_parser::TypeDefKind::Tuple(v) => {
+                        let mut args = Vec::new();
+                        let mut ptr = ptr;
+
+                        for ty in v.types.iter() {
+                            let (v, p) =
+                                Value::load(cx, memory, &mut slice::from_ref(ty).iter(), ptr);
+
+                            args.push(v);
+                            ptr = p;
+                        }
+
+                        let ValueType::Tuple(ty) = &cx.types[id.index()] else {
+                            panic!("Invalid type");
+                        };
+
+                        (Value::Tuple(Tuple::new(ty.clone(), args).unwrap()), ptr)
+                    }
+                    wit_parser::TypeDefKind::Variant(_) => todo!(),
+                    wit_parser::TypeDefKind::Enum(_) => todo!(),
+                    wit_parser::TypeDefKind::Option(_) => todo!(),
+                    wit_parser::TypeDefKind::Result(_) => todo!(),
+                    wit_parser::TypeDefKind::List(_) => todo!(),
+                    wit_parser::TypeDefKind::Future(_) => todo!(),
+                    wit_parser::TypeDefKind::Stream(_) => todo!(),
+                    wit_parser::TypeDefKind::Type(_) => todo!(),
+                    wit_parser::TypeDefKind::Unknown => todo!(),
+                }
+            }
             _ => todo!(),
         }
     }
@@ -131,6 +176,7 @@ impl Lift for Value {
     ) -> Self {
         match ty.next().unwrap() {
             Type::S32 => Value::S32(i32::load_flat(cx, ty, args)),
+            Type::String => Value::String(String::load_flat(cx, ty, args).into()),
             _ => todo!(),
         }
     }
@@ -172,11 +218,7 @@ impl<A: ComponentType, B: ComponentType> ComponentType for (A, B) {
     }
 }
 
-impl<A, B> Lower for (A, B)
-where
-    A: Lower,
-    B: Lower,
-{
+impl<A: Lower, B: Lower> Lower for (A, B) {
     fn store<E: WasmEngine, T>(
         &self,
         cx: &mut LowerContext<'_, '_, E, T>,
@@ -199,6 +241,30 @@ where
     }
 }
 
+impl<A: Lift, B: Lift> Lift for (A, B) {
+    fn load<E: WasmEngine, T>(
+        cx: &mut LiftContext<'_, '_, E, T>,
+        memory: &Memory,
+        ty: &mut dyn Iterator<Item = &Type>,
+        ptr: usize,
+    ) -> (Self, usize)
+    where
+        Self: Sized,
+    {
+        let (a, ptr) = A::load(cx, memory, ty, ptr);
+        let (b, ptr) = B::load(cx, memory, ty, ptr);
+
+        ((a, b), ptr)
+    }
+
+    fn load_flat<E: WasmEngine, T>(
+        cx: &mut LiftContext<'_, '_, E, T>,
+        ty: &mut dyn Iterator<Item = &Type>,
+        args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
+    ) -> Self {
+        (A::load_flat(cx, ty, args), B::load_flat(cx, ty, args))
+    }
+}
 /// Used when lowering into guest memory
 pub struct LowerContext<'a, 't, E: WasmEngine, T> {
     /// The store context
@@ -211,6 +277,9 @@ pub struct LowerContext<'a, 't, E: WasmEngine, T> {
 
 /// Used when lifting from guest memory
 pub struct LiftContext<'a, 't, E: WasmEngine, T> {
+    pub resolve: &'a Resolve,
+    /// Wit types have been converted to crate types for convenience
+    pub types: &'a [ValueType],
     /// The store context
     pub store: StoreContextMut<'t, T, E>,
     /// The guest memory

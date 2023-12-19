@@ -3,7 +3,7 @@ macro_rules! require_matches {
     ($expression:expr, $pattern:pat $(if $guard:expr)?, $then: expr) => {
         match $expression {
             $pattern $(if $guard)? => $then,
-            _ => bail!("Incorrect type.")
+            _ => anyhow::bail!("Incorrect type.")
         }
     };
 }
