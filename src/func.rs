@@ -155,7 +155,7 @@ impl Func {
                         let (ret, ptr) = Ret::load(
                             &mut cx,
                             memory,
-                            &mut function.results.iter_types(),
+                            &mut function.results.iter_types().peekable(),
                             retptr as _,
                         );
 
@@ -165,7 +165,7 @@ impl Func {
                     } else {
                         let ret = Ret::load_flat(
                             &mut cx,
-                            &mut function.results.iter_types(),
+                            &mut function.results.iter_types().peekable(),
                             &mut results.into_iter(),
                         );
 

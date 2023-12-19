@@ -1,14 +1,29 @@
 //! Conversion between guest and host types
 
-use std::{slice, vec};
+use std::{iter::Peekable, slice, vec};
 
 use wasm_runtime_layer::{backend::WasmEngine, Func, Memory};
 use wit_parser::{Resolve, Type};
 
-use crate::{require_matches::require_matches, StoreContextMut, Tuple, Value, ValueType};
+use crate::{StoreContextMut, Tuple, Value, ValueType};
 
 /// Implementation for native rust types
 mod primitive_impls;
+
+/// Utilizty trait for peekable iterator
+pub trait PeekableIter: Iterator {
+    /// Peeks the next item of the iterator
+    fn peek(&mut self) -> Option<&Self::Item>;
+}
+
+impl<I> PeekableIter for Peekable<I>
+where
+    I: Iterator,
+{
+    fn peek(&mut self) -> Option<&Self::Item> {
+        self.peek()
+    }
+}
 
 /// A component type representation in guest memory
 pub trait ComponentType {
@@ -34,7 +49,7 @@ pub trait Lift: ComponentType {
     fn load<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
         memory: &Memory,
-        ty: &mut dyn Iterator<Item = &Type>,
+        ty: &mut dyn PeekableIter<Item = &Type>,
         ptr: usize,
     ) -> (Self, usize)
     where
@@ -46,7 +61,7 @@ pub trait Lift: ComponentType {
     /// [`Value`].
     fn load_flat<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
-        ty: &mut dyn Iterator<Item = &Type>,
+        ty: &mut dyn PeekableIter<Item = &Type>,
         args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
     ) -> Self;
 }
@@ -68,7 +83,7 @@ pub trait Lower: ComponentType {
         &self,
         cx: &mut LowerContext<'_, '_, E, T>,
         memory: &Memory,
-        ptr: usize,
+        dst_ptr: usize,
     ) -> usize;
 
     /// Lower into guest function arguments
@@ -117,7 +132,7 @@ impl Lift for Value {
     fn load<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
         memory: &Memory,
-        ty: &mut dyn Iterator<Item = &Type>,
+        ty: &mut dyn PeekableIter<Item = &Type>,
         ptr: usize,
     ) -> (Self, usize) {
         match ty.next().unwrap() {
@@ -141,8 +156,12 @@ impl Lift for Value {
                         let mut ptr = ptr;
 
                         for ty in v.types.iter() {
-                            let (v, p) =
-                                Value::load(cx, memory, &mut slice::from_ref(ty).iter(), ptr);
+                            let (v, p) = Value::load(
+                                cx,
+                                memory,
+                                &mut slice::from_ref(ty).iter().peekable(),
+                                ptr,
+                            );
 
                             args.push(v);
                             ptr = p;
@@ -171,7 +190,7 @@ impl Lift for Value {
 
     fn load_flat<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
-        ty: &mut dyn Iterator<Item = &Type>,
+        ty: &mut dyn PeekableIter<Item = &Type>,
         args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
     ) -> Self {
         match ty.next().unwrap() {
@@ -245,7 +264,7 @@ impl<A: Lift, B: Lift> Lift for (A, B) {
     fn load<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
         memory: &Memory,
-        ty: &mut dyn Iterator<Item = &Type>,
+        ty: &mut dyn PeekableIter<Item = &Type>,
         ptr: usize,
     ) -> (Self, usize)
     where
@@ -259,7 +278,7 @@ impl<A: Lift, B: Lift> Lift for (A, B) {
 
     fn load_flat<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
-        ty: &mut dyn Iterator<Item = &Type>,
+        ty: &mut dyn PeekableIter<Item = &Type>,
         args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
     ) -> Self {
         (A::load_flat(cx, ty, args), B::load_flat(cx, ty, args))
@@ -277,6 +296,7 @@ pub struct LowerContext<'a, 't, E: WasmEngine, T> {
 
 /// Used when lifting from guest memory
 pub struct LiftContext<'a, 't, E: WasmEngine, T> {
+    /// WIT resolve context
     pub resolve: &'a Resolve,
     /// Wit types have been converted to crate types for convenience
     pub types: &'a [ValueType],
