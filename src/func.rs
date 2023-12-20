@@ -10,6 +10,7 @@ use wasm_runtime_layer::*;
 use wasmtime_environ::component::StringEncoding;
 
 use crate::abi::{Generator, *};
+use crate::conv::alloc_list;
 use crate::conv::Lift;
 use crate::conv::LiftContext;
 use crate::conv::Lower;
@@ -90,10 +91,16 @@ impl Func {
     pub fn call_typed<C, Params, Ret>(&self, mut ctx: C, args: Params) -> Result<Ret>
     where
         C: AsContextMut,
-        Params: Debug + Lower,
-        Ret: Debug + Lift,
+        Params: Lower,
+        Ret: Lift,
     {
-        let _span = tracing::info_span!( "Func::call_typed", ty=%self.ty, ?args).entered();
+        let _span = tracing::info_span!(
+            "Func::call_typed",
+            ty = %self.ty,
+            args = std::any::type_name::<Params>(),
+            ret = std::any::type_name::<Ret>(),
+        )
+        .entered();
         if ctx.as_context().inner.data().id != self.store_id {
             panic!("Attempted to call function with incorrect store.");
         }
@@ -114,66 +121,80 @@ impl Func {
 
                 tracing::debug!(?function, "function");
 
-                // All arguments fit on the stack
-                if !sig.indirect_params {
-                    // Lower the arguments into the guest memory.
-                    //
-                    // This may in turn call `store` for nested types, ensuring that they land in
-                    // memory
+                let mut results = vec![wasm_runtime_layer::Value::I32(0)];
+                {
                     let mut store = ctx.as_context_mut();
-                    args.store_flat(
-                        &mut LowerContext {
+                    // All arguments fit on the stack
+                    if !sig.indirect_params {
+                        // Lower the arguments into the guest memory.
+                        //
+                        // This may in turn call `store` for nested types, ensuring that they land in
+                        // memory
+                        args.store_flat(
+                            &mut LowerContext {
+                                store: &mut store,
+                                realloc: f.realloc.as_ref(),
+                                memory: f.memory.as_ref(),
+                            },
+                            &mut flat_args,
+                        );
+                        tracing::debug!(?flat_args, "flat args");
+                    } else {
+                        let memory = f.memory.as_ref().unwrap();
+                        let mut cx = LowerContext {
                             store: &mut store,
                             realloc: f.realloc.as_ref(),
-                            memory: f.memory.as_ref(),
-                        },
-                        &mut flat_args,
-                    );
-                    tracing::debug!(?flat_args, "flat args");
+                            memory: Some(memory),
+                        };
 
-                    let mut results = vec![wasm_runtime_layer::Value::I32(0)];
+                        let dst_ptr = alloc_list(&mut cx, args.size() as i32, args.align() as i32)?;
+
+                        args.store(&mut cx, memory, dst_ptr as usize);
+
+                        (dst_ptr).store_flat(&mut cx, &mut flat_args);
+                    }
+
                     f.callee
                         .call(&mut store.inner, &flat_args, &mut results)
                         .context("Failed to call guest function")?;
+                }
 
-                    let mut cx = LiftContext {
-                        types: &f.types,
-                        resolve: &resolve,
-                        store,
-                        memory: f.memory.as_ref(),
+                let store = ctx.as_context_mut();
+                let mut cx = LiftContext {
+                    types: &f.types,
+                    resolve,
+                    store,
+                    memory: f.memory.as_ref(),
+                };
+
+                if sig.retptr {
+                    let Some(wasm_runtime_layer::Value::I32(retptr)) = results.pop() else {
+                        panic!("Invalid return value")
                     };
 
-                    if sig.retptr {
-                        let Some(wasm_runtime_layer::Value::I32(retptr)) = results.pop() else {
-                            panic!("Invalid return value")
-                        };
+                    let memory = f.memory.as_ref().unwrap();
 
-                        let memory = f.memory.as_ref().unwrap();
+                    tracing::debug!("{:?}", function.results.iter_types().collect::<Vec<_>>());
 
-                        tracing::debug!("{:?}", function.results.iter_types().collect::<Vec<_>>());
+                    let (ret, ptr) = Ret::load(
+                        &mut cx,
+                        memory,
+                        &mut function.results.iter_types().peekable(),
+                        retptr as _,
+                    );
 
-                        let (ret, ptr) = Ret::load(
-                            &mut cx,
-                            memory,
-                            &mut function.results.iter_types().peekable(),
-                            retptr as _,
-                        );
+                    tracing::debug!(?retptr, ?ptr);
 
-                        tracing::debug!(?retptr, ?ptr);
-
-                        Ok(ret)
-                    } else {
-                        let ret = Ret::load_flat(
-                            &mut cx,
-                            &mut function.results.iter_types().peekable(),
-                            &mut results.into_iter(),
-                        );
-
-                        tracing::debug!(?ret, "got result");
-                        Ok(ret)
-                    }
+                    Ok(ret)
                 } else {
-                    todo!("indirect")
+                    let ret = Ret::load_flat(
+                        &mut cx,
+                        &mut function.results.iter_types().peekable(),
+                        &mut results.into_iter(),
+                    );
+
+                    tracing::debug!("got result");
+                    Ok(ret)
                 }
             }
             _ => todo!(),
@@ -1544,7 +1565,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
         let old = replace(&mut self.functions, Vec::with_capacity(new_len));
         for (idx, val) in old {
             if Arc::strong_count(&idx) > 1 {
-                AtomicUsize::store(&*idx, self.functions.len(), Ordering::Release);
+                AtomicUsize::store(&idx, self.functions.len(), Ordering::Release);
                 self.functions.push((idx, val));
             }
         }

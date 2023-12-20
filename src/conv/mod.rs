@@ -5,11 +5,7 @@ use std::{iter::Peekable, slice, sync::Arc, vec};
 use wasm_runtime_layer::{backend::WasmEngine, Func, Memory};
 use wit_parser::{Resolve, Type};
 
-use crate::{
-    private::ListSpecialization, List, ListType, Record, StoreContextMut, Tuple, Value, ValueType,
-};
-
-use self::primitive_impls::alloc_list;
+use crate::{private::ListSpecialization, List, StoreContextMut, Tuple, Value, ValueType};
 
 /// Implementation for native rust types
 mod primitive_impls;
@@ -429,44 +425,105 @@ fn align_to(ptr: usize, align: usize) -> usize {
     (ptr + (align - 1)) & !(align - 1)
 }
 
-impl<A: ComponentType, B: ComponentType> ComponentType for (A, B) {
-    fn size(&self) -> usize {
-        let mut s = 0;
-        s = align_to(s + self.0.size(), self.0.align());
-        s = align_to(s + self.1.size(), self.1.align());
+/// Implement Lift and Lower for tuples
+macro_rules! tuple_impl {
+    ($($idx: tt $t: ident),*) => {
+        impl<$($t: ComponentType,)*> ComponentType for ($($t,)*) {
+            fn size(&self) -> usize {
+                let mut s = 0;
+                $(s = align_to(s + self.$idx.size(), self.$idx.align());)*
 
-        s
+                s
+            }
+
+            fn align(&self) -> usize {
+                0 $(.max(self.$idx.align()))*
+            }
+        }
+
+        impl<$($t: Lower,)*> Lower for ($($t,)*) {
+            fn store<En: WasmEngine, T>(
+                &self,
+                cx: &mut LowerContext<'_, '_, En, T>,
+                memory: &Memory,
+                mut ptr: usize,
+            ) -> usize {
+                $(ptr = self.$idx.store(cx, memory, ptr);)*
+
+                ptr
+            }
+
+            fn store_flat<En: WasmEngine, T>(
+                &self,
+                cx: &mut LowerContext<'_, '_, En, T>,
+                dst: &mut Vec<wasm_runtime_layer::Value>,
+            ) {
+                $(self.$idx.store_flat(cx, dst);)*
+            }
+        }
+
+        impl<$($t: Lift,)*> Lift for ($($t,)*) {
+            fn load<En: WasmEngine, T>(
+                cx: &mut LiftContext<'_, '_, En, T>,
+                memory: &Memory,
+                ty: &mut dyn PeekableIter<Item = &Type>,
+                ptr: usize,
+            ) -> (Self, usize)
+            where
+                Self: Sized,
+            {
+                $(
+                    #[allow(non_snake_case)]
+                    let ($t, ptr) = $t::load(cx, memory, ty, ptr);
+                )*
+
+                (($($t,)*), ptr)
+            }
+
+            fn load_flat<En: WasmEngine, T>(
+                cx: &mut LiftContext<'_, '_, En, T>,
+                ty: &mut dyn PeekableIter<Item = &Type>,
+                args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
+            ) -> Self {
+                $(
+                    #[allow(non_snake_case)]
+                    let $t = $t::load_flat(cx, ty, args);
+                )*
+
+                ($($t,)*)
+            }
+        }
+    };
+}
+
+tuple_impl! { 0 A }
+tuple_impl! { 0 A, 1 B }
+tuple_impl! { 0 A, 1 B, 2 C }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K, 11 L }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K, 11 L, 12 M }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K, 11 L, 12 M, 13 N}
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K, 11 L, 12 M, 13 N, 14 O }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K, 11 L, 12 M, 13 N, 14 O, 15 P }
+tuple_impl! { 0 A, 1 B, 2 C, 3 D, 4 E, 5 F, 6 G, 7 H, 8 I, 9 J, 10 K, 11 L, 12 M, 13 N, 14 O, 15 P, 16 Q }
+
+impl ComponentType for () {
+    fn size(&self) -> usize {
+        0
     }
 
     fn align(&self) -> usize {
-        self.0.align().max(self.1.align())
+        0
     }
 }
 
-impl<A: Lower, B: Lower> Lower for (A, B) {
-    fn store<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        memory: &Memory,
-        mut ptr: usize,
-    ) -> usize {
-        ptr = self.0.store(cx, memory, ptr);
-        ptr = self.1.store(cx, memory, ptr);
-
-        ptr
-    }
-
-    fn store_flat<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        dst: &mut Vec<wasm_runtime_layer::Value>,
-    ) {
-        self.0.store_flat(cx, dst);
-        self.1.store_flat(cx, dst);
-    }
-}
-
-impl<A: Lift, B: Lift> Lift for (A, B) {
+impl Lift for () {
     fn load<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
         memory: &Memory,
@@ -476,10 +533,7 @@ impl<A: Lift, B: Lift> Lift for (A, B) {
     where
         Self: Sized,
     {
-        let (a, ptr) = A::load(cx, memory, ty, ptr);
-        let (b, ptr) = B::load(cx, memory, ty, ptr);
-
-        ((a, b), ptr)
+        ((), ptr)
     }
 
     fn load_flat<E: WasmEngine, T>(
@@ -487,9 +541,9 @@ impl<A: Lift, B: Lift> Lift for (A, B) {
         ty: &mut dyn PeekableIter<Item = &Type>,
         args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
     ) -> Self {
-        (A::load_flat(cx, ty, args), B::load_flat(cx, ty, args))
     }
 }
+
 /// Used when lowering into guest memory
 pub struct LowerContext<'a, 't, E: WasmEngine, T> {
     /// The store context
@@ -512,4 +566,30 @@ pub struct LiftContext<'a, 't, E: WasmEngine, T> {
     ///
     /// It is not always available, such as during init
     pub memory: Option<&'a Memory>,
+}
+
+/// Allocate a block of memory in the guest for string and list lowering
+pub(crate) fn alloc_list<E: WasmEngine, T>(
+    cx: &mut LowerContext<'_, '_, E, T>,
+    size: i32,
+    align: i32,
+) -> anyhow::Result<i32> {
+    let mut res = [wasm_runtime_layer::Value::I32(0)];
+    cx.realloc.unwrap().call(
+        &mut cx.store.inner,
+        // old_ptrmut , old_len, align, new_len
+        &[
+            wasm_runtime_layer::Value::I32(0),
+            wasm_runtime_layer::Value::I32(0),
+            wasm_runtime_layer::Value::I32(align),
+            wasm_runtime_layer::Value::I32(size),
+        ],
+        &mut res,
+    )?;
+
+    let [wasm_runtime_layer::Value::I32(ptr)] = res else {
+        panic!("Invalid return value")
+    };
+
+    Ok(ptr)
 }

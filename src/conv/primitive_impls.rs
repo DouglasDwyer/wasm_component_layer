@@ -3,6 +3,8 @@ use std::{ops::Deref, sync::Arc};
 use wasm_runtime_layer::{backend::WasmEngine, Memory, Value};
 use wit_parser::Type;
 
+use crate::conv::alloc_list;
+
 use super::{ComponentType, Lift, LiftContext, Lower, LowerContext, PeekableIter};
 
 impl ComponentType for i32 {
@@ -274,32 +276,6 @@ impl<V: Lower> Lower for Vec<V> {
     ) {
         self.as_slice().store_flat(cx, dst)
     }
-}
-
-/// Allocate a block of memory in the guest for string and list lowering
-pub(crate) fn alloc_list<E: WasmEngine, T>(
-    cx: &mut LowerContext<'_, '_, E, T>,
-    size: i32,
-    align: i32,
-) -> anyhow::Result<i32> {
-    let mut res = [wasm_runtime_layer::Value::I32(0)];
-    cx.realloc.unwrap().call(
-        &mut cx.store.inner,
-        // old_ptrmut , old_len, align, new_len
-        &[
-            Value::I32(0),
-            Value::I32(0),
-            Value::I32(align),
-            Value::I32(size),
-        ],
-        &mut res,
-    )?;
-
-    let [Value::I32(ptr)] = res else {
-        panic!("Invalid return value")
-    };
-
-    Ok(ptr)
 }
 
 /// Allocate a block of memory in the guest for string and list lowering
