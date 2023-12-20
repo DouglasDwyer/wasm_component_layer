@@ -46,9 +46,7 @@ impl Lift for i32 {
     ) -> (Self, usize) {
         let memory = cx.memory.unwrap();
         let mut buf = [0u8; 4];
-        memory
-            .read(&mut cx.store.inner, ptr as usize, &mut buf)
-            .unwrap();
+        memory.read(&mut cx.store.inner, ptr, &mut buf).unwrap();
         let v = i32::from_le_bytes(buf);
         tracing::debug!(?v);
         (v, ptr + 4)
@@ -196,16 +194,115 @@ impl<V: Lower> Lower for [V] {
 
         let memory = cx.memory.unwrap();
 
-        let mut cur = ptr as usize;
-        for item in self {
-            // TODO: specialize using a default trait method :D
-            cur = item.store(cx, memory, cur);
-        }
+        V::store_list(self, cx, memory, ptr as usize);
 
         (ptr, byte_len).store_flat(cx, dst);
     }
 }
 
+impl<V: ComponentType> ComponentType for Vec<V> {
+    fn size(&self) -> usize {
+        self.as_slice().size()
+    }
+
+    fn align(&self) -> usize {
+        self.as_slice().size()
+    }
+}
+
+impl<V: Lift> Lift for Vec<V> {
+    fn load<E: WasmEngine, T>(
+        cx: &mut LiftContext<'_, '_, E, T>,
+        memory: &Memory,
+        ty: &mut dyn PeekableIter<Item = &Type>,
+        ptr: usize,
+    ) -> (Self, usize) {
+        let ((b_ptr, len), new_ptr) = <(i32, i32)>::load(cx, memory, ty, ptr);
+
+        let mut ptr = b_ptr as usize;
+        let res = (0..len)
+            .map(|idx| {
+                tracing::debug!(?idx);
+                let (v, p) = V::load(cx, memory, ty, ptr);
+                ptr = p;
+
+                v
+            })
+            .collect();
+
+        (res, new_ptr)
+    }
+
+    fn load_flat<E: WasmEngine, T>(
+        cx: &mut LiftContext<'_, '_, E, T>,
+        ty: &mut dyn PeekableIter<Item = &Type>,
+        args: &mut std::vec::IntoIter<wasm_runtime_layer::Value>,
+    ) -> Self {
+        let b_ptr = i32::load_flat(cx, ty, args);
+        let len = i32::load_flat(cx, ty, args);
+
+        let memory = cx.memory.unwrap();
+
+        let mut ptr = b_ptr as usize;
+
+        (0..len)
+            .map(|idx| {
+                tracing::debug!(?idx);
+                let (v, p) = V::load(cx, memory, ty, ptr);
+                ptr = p;
+
+                v
+            })
+            .collect()
+    }
+}
+
+impl<V: Lower> Lower for Vec<V> {
+    fn store<E: WasmEngine, T>(
+        &self,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        memory: &Memory,
+        dst_ptr: usize,
+    ) -> usize {
+        self.as_slice().store(cx, memory, dst_ptr)
+    }
+
+    fn store_flat<E: WasmEngine, T>(
+        &self,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        dst: &mut Vec<wasm_runtime_layer::Value>,
+    ) {
+        self.as_slice().store_flat(cx, dst)
+    }
+}
+
+/// Allocate a block of memory in the guest for string and list lowering
+pub(crate) fn alloc_list<E: WasmEngine, T>(
+    cx: &mut LowerContext<'_, '_, E, T>,
+    size: i32,
+    align: i32,
+) -> anyhow::Result<i32> {
+    let mut res = [wasm_runtime_layer::Value::I32(0)];
+    cx.realloc.unwrap().call(
+        &mut cx.store.inner,
+        // old_ptrmut , old_len, align, new_len
+        &[
+            Value::I32(0),
+            Value::I32(0),
+            Value::I32(align),
+            Value::I32(size),
+        ],
+        &mut res,
+    )?;
+
+    let [Value::I32(ptr)] = res else {
+        panic!("Invalid return value")
+    };
+
+    Ok(ptr)
+}
+
+/// Allocate a block of memory in the guest for string and list lowering
 macro_rules! auto_impl {
     ($ty: ty, [$($t: tt),*] $ptr: ty) => {
 
@@ -245,29 +342,3 @@ macro_rules! auto_impl {
 
 auto_impl! { str => [] String, [] Box<str>, [] Arc<str>, [] &str }
 auto_impl! { V => [V] Box<V>, [V] Arc<V>, [V] &[V] }
-
-/// Allocate a block of memory in the guest for string and list lowering
-pub(crate) fn alloc_list<E: WasmEngine, T>(
-    cx: &mut LowerContext<'_, '_, E, T>,
-    size: i32,
-    align: i32,
-) -> anyhow::Result<i32> {
-    let mut res = [wasm_runtime_layer::Value::I32(0)];
-    cx.realloc.unwrap().call(
-        &mut cx.store.inner,
-        // old_ptrmut , old_len, align, new_len
-        &[
-            Value::I32(0),
-            Value::I32(0),
-            Value::I32(align),
-            Value::I32(size),
-        ],
-        &mut res,
-    )?;
-
-    let [Value::I32(ptr)] = res else {
-        panic!("Invalid return value")
-    };
-
-    Ok(ptr)
-}

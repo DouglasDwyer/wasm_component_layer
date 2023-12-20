@@ -277,6 +277,34 @@ impl ValueType {
             wit_parser::TypeDefKind::Unknown => unreachable!(),
         })
     }
+
+    pub(crate) fn size(&self) -> usize {
+        match self {
+            ValueType::Bool => 4,
+            ValueType::S8 => 1,
+            ValueType::U8 => 1,
+            ValueType::S16 => 2,
+            ValueType::U16 => 2,
+            ValueType::S32 => 4,
+            ValueType::U32 => 4,
+            ValueType::S64 => 8,
+            ValueType::U64 => 8,
+            ValueType::F32 => 4,
+            ValueType::F64 => 8,
+            ValueType::Char => 4,
+            ValueType::String => 4 + 4,
+            ValueType::List(_) => 4 + 4,
+            ValueType::Record(v) => v.size(),
+            ValueType::Tuple(v) => v.size(),
+            ValueType::Variant(v) => v.size(),
+            ValueType::Enum(v) => v.size(),
+            ValueType::Option(v) => v.size(),
+            ValueType::Result(v) => v.size(),
+            ValueType::Flags(v) => v.size(),
+            ValueType::Own(v) => v.size(),
+            ValueType::Borrow(v) => v.size(),
+        }
+    }
 }
 
 /// Describes the type of a list of values, all of the same type.
@@ -410,6 +438,10 @@ impl RecordType {
             name,
         })
     }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
 }
 
 impl PartialEq for RecordType {
@@ -468,6 +500,10 @@ impl TupleType {
             .map(|x| ValueType::from_component(x, component, resource_map))
             .collect::<Result<_>>()?;
         Ok(Self { name, fields })
+    }
+
+    fn size(&self) -> usize {
+        todo!()
     }
 }
 
@@ -582,6 +618,10 @@ impl VariantType {
 
         Ok(Self { name, cases })
     }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
 }
 
 impl PartialEq for VariantType {
@@ -649,6 +689,10 @@ impl EnumType {
     ) -> Result<Self> {
         Self::new(name, ty.cases.iter().map(|x| x.name.as_str()))
     }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
 }
 
 impl PartialEq for EnumType {
@@ -683,6 +727,10 @@ impl OptionType {
     pub fn some_ty(&self) -> ValueType {
         (*self.ty).clone()
     }
+
+    fn size(&self) -> usize {
+        todo!()
+    }
 }
 
 /// A type that denotes successful or unsuccessful operation.
@@ -709,6 +757,10 @@ impl ResultType {
     /// Gets the type of value returned for the `Err` variant, if any.
     pub fn err_ty(&self) -> Option<ValueType> {
         self.ok_err.1.clone()
+    }
+
+    fn size(&self) -> usize {
+        todo!()
     }
 }
 
@@ -773,6 +825,10 @@ impl FlagsType {
         _component: &ComponentInner,
     ) -> Result<Self> {
         Self::new(name, ty.flags.iter().map(|x| x.name.as_ref()))
+    }
+
+    fn size(&self) -> usize {
+        todo!()
     }
 }
 
@@ -944,6 +1000,10 @@ impl ResourceType {
     /// Determines whether this is an instantiated or host resource.
     pub(crate) fn is_instantiated(&self) -> bool {
         !matches!(&self.kind, ResourceKindValue::Abstract { .. })
+    }
+
+    fn size(&self) -> usize {
+        todo!()
     }
 }
 
