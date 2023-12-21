@@ -175,11 +175,19 @@ impl<V: ComponentType> ComponentType for [V] {
 impl<V: Lower> Lower for [V] {
     fn store<E: WasmEngine, T>(
         &self,
-        _: &mut LowerContext<'_, '_, E, T>,
-        _: &Memory,
-        _: usize,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        memory: &Memory,
+        dst_ptr: usize,
     ) -> usize {
-        todo!()
+        let byte_len: i32 = self.len().try_into().expect("list too long");
+
+        let ptr = alloc_list(cx, byte_len, 1).expect("failed to allocate list");
+
+        tracing::debug!(?ptr, ?byte_len, "allocated list");
+
+        V::store_list(self, cx, memory, ptr as usize);
+
+        (ptr, byte_len).store(cx, memory, dst_ptr)
     }
 
     fn store_flat<E: WasmEngine, T>(
@@ -187,12 +195,11 @@ impl<V: Lower> Lower for [V] {
         cx: &mut LowerContext<'_, '_, E, T>,
         dst: &mut Vec<wasm_runtime_layer::Value>,
     ) {
-        // String::len returns the number of bytes, not the number of characters
-        let byte_len: i32 = self.len().try_into().expect("string too long");
+        let byte_len: i32 = self.len().try_into().expect("list too long");
 
-        let ptr = alloc_list(cx, byte_len, 1).expect("failed to allocate string");
+        let ptr = alloc_list(cx, byte_len, 1).expect("failed to allocate list");
 
-        tracing::debug!(?ptr, ?byte_len, "allocated string");
+        tracing::debug!(?ptr, ?byte_len, "allocated list");
 
         let memory = cx.memory.unwrap();
 
