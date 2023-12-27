@@ -834,7 +834,7 @@ impl ResourceOwn {
     /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
     pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
-        ctx: &'a crate::StoreContext<T, E>,
+        ctx: &'a crate::StoreContext<S, E>,
     ) -> Result<&'a T> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,
@@ -993,7 +993,7 @@ impl ResourceBorrow {
     /// Gets the internal representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
     pub fn rep<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
         &self,
-        ctx: &'a crate::StoreContext<T, E>,
+        ctx: &'a crate::StoreContext<S, E>,
     ) -> Result<&'a T> {
         ensure!(
             self.store_id == ctx.as_context().inner.data().id,

@@ -1,4 +1,6 @@
 /target
 /Cargo.lock
+/examples/resource/target
+/examples/resource/Cargo.lock
 /examples/single_component/target
 /examples/single_component/Cargo.lock

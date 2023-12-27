@@ -800,7 +800,7 @@ static RESOURCE_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// - An instantiated guest resource, associated with an instance. Instantiated guest
 /// resources identify resources created by WASM.
 /// - A host resource, which is associated with a native value.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ResourceType {
     /// The kind of resource that this is.
     kind: ResourceKindValue,
@@ -946,6 +946,20 @@ impl ResourceType {
         !matches!(&self.kind, ResourceKindValue::Abstract { .. })
     }
 }
+
+impl Hash for ResourceType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.kind.hash(state);
+    }
+}
+
+impl PartialEq for ResourceType {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+
+impl Eq for ResourceType {}
 
 #[cfg(feature = "serde")]
 impl Serialize for ResourceType {

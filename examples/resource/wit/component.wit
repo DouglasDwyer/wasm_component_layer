@@ -1,0 +1,18 @@
+package test:guest
+
+interface foo {
+    // Creates and uses a resource
+    use-resource: func()
+}
+
+interface bar {
+    resource myresource { 
+        constructor(a: s32)
+        print-a: func()
+    }
+}
+
+world guest {
+    export foo
+    import bar
+}

@@ -389,7 +389,7 @@ impl Component {
         let mut res = Vec::with_capacity(resolve.packages.len());
 
         for (_, pkg) in &resolve.packages {
-            res.push(PackageIdentifier::try_from(&pkg.name)?);
+            res.push(PackageIdentifier::from(&pkg.name));
         }
 
         Ok(res)
