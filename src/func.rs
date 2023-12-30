@@ -223,10 +223,7 @@ impl Func {
             .iter()
             .map(TryFrom::try_from)
             .collect::<Result<Vec<_>>>()?;
-        let mut res = results
-            .iter()
-            .map(TryFrom::try_from)
-            .collect::<Result<Vec<_>>>()?;
+        let mut res = vec!(Value::Bool(false); results.len());
 
         let mut bindgen = FuncBindgen {
             ctx,
