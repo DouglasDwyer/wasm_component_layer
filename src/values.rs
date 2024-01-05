@@ -253,6 +253,10 @@ impl List {
             ListSpecialization::Other(x) => x.len(),
         }
     }
+
+    pub(crate) fn values(&self) -> &ListSpecialization {
+        &self.values
+    }
 }
 
 impl PartialEq for List {
@@ -1587,7 +1591,7 @@ impl_unary!(
 );
 
 /// A module used to hide traits that are implementation details.
-mod private {
+pub(crate) mod private {
     use super::*;
 
     /// The inner backing for a list, specialized over primitive types for efficient access.
