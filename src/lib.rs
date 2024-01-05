@@ -1281,15 +1281,26 @@ impl Instance {
                 types.len() == id.index(),
                 "Type definition IDs were not equal."
             );
-            if val.kind == TypeDefKind::Resource {
-                types.push(crate::types::ValueType::Bool);
-            } else {
-                types.push(crate::types::ValueType::from_component_typedef(
-                    id,
-                    &component.0,
-                    Some(map),
-                )?);
-            }
+
+            match val.kind {
+                TypeDefKind::Resource => {
+                    types.push(crate::types::ValueType::Bool);
+                    continue;
+                }
+                TypeDefKind::Type(Type::Id(x)) => {
+                    if component.0.resolve.types[x].kind == TypeDefKind::Resource {
+                        types.push(crate::types::ValueType::Bool);
+                        continue;
+                    }
+                }
+                _ => {}
+            };
+
+            types.push(crate::types::ValueType::from_component_typedef(
+                id,
+                &component.0,
+                Some(map),
+            )?);
         }
         Ok(types.into())
     }

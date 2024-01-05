@@ -1,18 +1,21 @@
-package test:guest
+package test:guest;
 
 interface foo {
+    use bar.{myresource};
     // Creates and uses a resource
-    use-resource: func()
+    use-resource: func();
+    // Creates and uses a resource
+    consume-resource: func(a: myresource);
 }
 
 interface bar {
     resource myresource { 
-        constructor(a: s32)
-        print-a: func()
+        constructor(a: s32);
+        print-a: func();
     }
 }
 
 world guest {
-    export foo
-    import bar
+    export foo;
+    import bar;
 }

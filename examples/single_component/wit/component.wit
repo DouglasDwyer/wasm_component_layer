@@ -1,10 +1,10 @@
-package test:guest
+package test:guest;
 
 interface foo {
     // Selects the item in position n within list x
-    select-nth: func(x: list<string>, n: u32) -> string
+    select-nth: func(x: list<string>, n: u32) -> string;
 }
 
 world guest {
-    export foo
+    export foo;
 }

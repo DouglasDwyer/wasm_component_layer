@@ -903,17 +903,24 @@ impl ResourceType {
         component: &ComponentInner,
         resource_map: Option<&FxHashMap<ResourceType, ResourceType>>,
     ) -> Result<Self> {
-        let ab = Self {
-            name,
-            kind: ResourceKindValue::Abstract {
-                id: id.index(),
-                component: component.id,
-            },
-        };
-        if let Some(map) = resource_map {
-            Ok(map[&ab].clone())
+        let resolve_type = &component.resolve.types[id];
+        if resolve_type.kind == wit_parser::TypeDefKind::Resource {
+            let ab = Self {
+                name,
+                kind: ResourceKindValue::Abstract {
+                    id: id.index(),
+                    component: component.id,
+                },
+            };
+            if let Some(map) = resource_map {
+                Ok(map[&ab].clone())
+            } else {
+                Ok(ab)
+            }
+        } else if let wit_parser::TypeDefKind::Type(wit_parser::Type::Id(x)) = resolve_type.kind {
+            Self::from_resolve(name, x, component, resource_map)
         } else {
-            Ok(ab)
+            bail!("Unrecognized resource type.")
         }
     }
 
