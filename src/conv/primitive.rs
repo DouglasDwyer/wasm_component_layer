@@ -1,59 +1,128 @@
 use std::{ops::Deref, sync::Arc};
 
-use wasm_runtime_layer::{backend::WasmEngine, Memory, Value};
+use crate::func::{Blittable, ByteArray};
+use wasm_runtime_layer::{backend::WasmEngine, Memory};
 use wit_parser::Type;
 
 use crate::conv::alloc_list;
 
 use super::{ComponentType, Lift, LiftContext, Lower, LowerContext, PeekableIter};
 
-impl ComponentType for i32 {
-    fn size(&self) -> usize {
-        std::mem::size_of::<i32>()
-    }
+macro_rules! integral_impl {
+    ($ty: ty, $variant: ident, $flat_repr: ty ) => {
+        impl ComponentType for $ty {
+            fn size(&self) -> usize {
+                std::mem::size_of::<$ty>()
+            }
 
-    fn align(&self) -> usize {
-        std::mem::align_of::<i32>()
-    }
+            fn align(&self) -> usize {
+                std::mem::align_of::<$ty>()
+            }
+        }
+
+        impl Lower for $ty {
+            fn store<E: WasmEngine, T>(
+                &self,
+                cx: &mut LowerContext<'_, '_, E, T>,
+                memory: &Memory,
+                ptr: usize,
+            ) -> usize {
+                Blittable::to_bytes(*self)
+                    .store(&mut cx.store, memory, ptr)
+                    .unwrap();
+                ptr + 4
+            }
+
+            fn store_flat<E: WasmEngine, T>(
+                &self,
+                _: &mut LowerContext<'_, '_, E, T>,
+                dst: &mut Vec<wasm_runtime_layer::Value>,
+            ) {
+                dst.push(wasm_runtime_layer::Value::$variant(*self as $flat_repr));
+            }
+        }
+
+        impl Lift for $ty {
+            fn load<E: WasmEngine, T>(
+                cx: &mut LiftContext<'_, '_, E, T>,
+                memory: &Memory,
+                _: &mut dyn PeekableIter<Item = &Type>,
+                ptr: usize,
+            ) -> (Self, usize) {
+                let v = <$ty as Blittable>::from_bytes(
+                    ByteArray::load(&cx.store, memory, ptr).unwrap(),
+                );
+                tracing::debug!(?v);
+                (v, ptr + 4)
+            }
+
+            fn load_flat<E: WasmEngine, T>(
+                _: &mut LiftContext<'_, '_, E, T>,
+                _: &mut dyn PeekableIter<Item = &Type>,
+                args: &mut std::vec::IntoIter<wasm_runtime_layer::Value>,
+            ) -> Self {
+                let wasm_runtime_layer::Value::$variant(v) =
+                    args.next().expect("too few arguments")
+                else {
+                    panic!("incorrect type, expected S32");
+                };
+
+                v as $ty
+            }
+        }
+    };
 }
 
-impl Lower for i32 {
+integral_impl!(u8, I32, i32);
+integral_impl!(i8, I32, i32);
+integral_impl!(u16, I32, i32);
+integral_impl!(i16, I32, i32);
+integral_impl!(u32, I32, i32);
+integral_impl!(i32, I32, i32);
+integral_impl!(u64, I64, i64);
+integral_impl!(i64, I64, i64);
+integral_impl!(f32, F32, f32);
+integral_impl!(f64, F64, f64);
+
+impl ComponentType for bool {
+    fn size(&self) -> usize {
+        std::mem::size_of::<bool>()
+    }
+    fn align(&self) -> usize {
+        std::mem::align_of::<bool>()
+    }
+}
+impl Lower for bool {
     fn store<E: WasmEngine, T>(
         &self,
         cx: &mut LowerContext<'_, '_, E, T>,
-        _: &Memory,
+        memory: &Memory,
         ptr: usize,
     ) -> usize {
-        let inner = &mut cx.store.inner;
-        let memory = &cx.memory.unwrap();
-        memory.write(inner, ptr, &self.to_le_bytes()).unwrap();
+        Blittable::to_bytes(*self)
+            .store(&mut cx.store, memory, ptr)
+            .unwrap();
         ptr + 4
     }
-
     fn store_flat<E: WasmEngine, T>(
         &self,
         _: &mut LowerContext<'_, '_, E, T>,
         dst: &mut Vec<wasm_runtime_layer::Value>,
     ) {
-        dst.push(wasm_runtime_layer::Value::I32(*self))
+        dst.push(wasm_runtime_layer::Value::I32(*self as u32 as i32));
     }
 }
-
-impl Lift for i32 {
+impl Lift for bool {
     fn load<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
-        _: &Memory,
+        memory: &Memory,
         _: &mut dyn PeekableIter<Item = &Type>,
         ptr: usize,
     ) -> (Self, usize) {
-        let memory = cx.memory.unwrap();
-        let mut buf = [0u8; 4];
-        memory.read(&mut cx.store.inner, ptr, &mut buf).unwrap();
-        let v = i32::from_le_bytes(buf);
-        tracing::debug!(?v);
+        let v = <bool as Blittable>::from_bytes(ByteArray::load(&cx.store, memory, ptr).unwrap());
+
         (v, ptr + 4)
     }
-
     fn load_flat<E: WasmEngine, T>(
         _: &mut LiftContext<'_, '_, E, T>,
         _: &mut dyn PeekableIter<Item = &Type>,
@@ -63,7 +132,64 @@ impl Lift for i32 {
             panic!("incorrect type, expected S32");
         };
 
-        v
+        match v {
+            0 => false,
+            1 => true,
+            _ => panic!("invalid bool value"),
+        }
+    }
+}
+
+impl ComponentType for char {
+    fn size(&self) -> usize {
+        std::mem::size_of::<char>()
+    }
+    fn align(&self) -> usize {
+        std::mem::align_of::<char>()
+    }
+}
+impl Lower for char {
+    fn store<E: WasmEngine, T>(
+        &self,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        memory: &Memory,
+        ptr: usize,
+    ) -> usize {
+        Blittable::to_bytes(*self)
+            .store(&mut cx.store, memory, ptr)
+            .unwrap();
+
+        ptr + 4
+    }
+    fn store_flat<E: WasmEngine, T>(
+        &self,
+        _: &mut LowerContext<'_, '_, E, T>,
+        dst: &mut Vec<wasm_runtime_layer::Value>,
+    ) {
+        dst.push(wasm_runtime_layer::Value::I32(*self as u32 as i32));
+    }
+}
+impl Lift for char {
+    fn load<E: WasmEngine, T>(
+        cx: &mut LiftContext<'_, '_, E, T>,
+        memory: &Memory,
+        _: &mut dyn PeekableIter<Item = &Type>,
+        ptr: usize,
+    ) -> (Self, usize) {
+        let v = <char as Blittable>::from_bytes(ByteArray::load(&cx.store, memory, ptr).unwrap());
+        tracing::debug!(?v);
+        (v, ptr + 4)
+    }
+    fn load_flat<E: WasmEngine, T>(
+        _: &mut LiftContext<'_, '_, E, T>,
+        _: &mut dyn PeekableIter<Item = &Type>,
+        args: &mut std::vec::IntoIter<wasm_runtime_layer::Value>,
+    ) -> Self {
+        let wasm_runtime_layer::Value::I32(v) = args.next().expect("too few arguments") else {
+            panic!("incorrect type, expected S32");
+        };
+
+        char::from_u32(v as u32).expect("invalid char")
     }
 }
 

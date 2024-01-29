@@ -1453,7 +1453,7 @@ impl std::error::Error for FuncError {
 }
 
 /// Marks a type that may be blitted directly to and from guest memory.
-trait Blittable: Sized {
+pub(crate) trait Blittable: Sized {
     /// The type of byte array that matches the layout of this type.
     type Array: ByteArray;
 
@@ -1505,8 +1505,73 @@ macro_rules! impl_blittable {
 
 impl_blittable!(u8 u16 u32 u64 i8 i16 i32 i64 f32 f64);
 
+impl Blittable for char {
+    type Array = [u8; 4];
+
+    fn from_bytes(array: Self::Array) -> Self {
+        Self::from_u32(u32::from_bytes(array)).expect("Invalid char pattern")
+    }
+
+    fn to_bytes(self) -> Self::Array {
+        (self as u32).to_bytes()
+    }
+
+    fn zeroed_array(len: usize) -> Arc<[u8]> {
+        // 0 ('\0') is a valid bit pattern
+        u32::zeroed_array(len)
+    }
+
+    fn from_le_array(array: Arc<[u8]>) -> Arc<[Self]> {
+        // NOTE: not all u32 bit patterns are valid char bit patterns
+        array
+            .chunks_exact(4)
+            .map(|v| char::from_bytes([v[0], v[1], v[2], v[3]]))
+            .collect::<Vec<_>>()
+            .into()
+    }
+
+    fn to_le_slice(data: &[Self]) -> &[u8] {
+        // ...but all chars are valid u32 bit patterns :P
+        assert!(
+            cfg!(target_endian = "little"),
+            "Attempted to bitcast to little-endian bytes on a big endian platform."
+        );
+        cast_slice(data)
+    }
+}
+
+impl Blittable for bool {
+    type Array = [u8; 1];
+
+    fn from_bytes(array: Self::Array) -> Self {
+        u8::from_bytes(array) != 0
+    }
+
+    fn to_bytes(self) -> Self::Array {
+        [self as u8]
+    }
+
+    fn zeroed_array(len: usize) -> Arc<[u8]> {
+        u32::zeroed_array(len)
+    }
+
+    fn from_le_array(array: Arc<[u8]>) -> Arc<[Self]> {
+        // 0 is false, anything else is true
+        array.iter().map(|v| *v != 0).collect::<Vec<_>>().into()
+    }
+
+    fn to_le_slice(data: &[Self]) -> &[u8] {
+        // 0 is false, anything else is true
+        assert!(
+            cfg!(target_endian = "little"),
+            "Attempted to bitcast to little-endian bytes on a big endian platform."
+        );
+        cast_slice(data)
+    }
+}
+
 /// Denotes a byte array of any size.
-trait ByteArray: Sized {
+pub(crate) trait ByteArray: Sized {
     /// Loads this byte array from a WASM memory.
     fn load(ctx: impl AsContext, memory: &Memory, offset: usize) -> Result<Self>;
 
