@@ -30,7 +30,7 @@ macro_rules! integral_impl {
                 Blittable::to_bytes(*self)
                     .store(&mut cx.store, memory, ptr)
                     .unwrap();
-                ptr + 4
+                ptr + std::mem::size_of::<$ty>()
             }
 
             fn store_flat<E: WasmEngine, T>(
@@ -53,7 +53,7 @@ macro_rules! integral_impl {
                     ByteArray::load(&cx.store, memory, ptr).unwrap(),
                 );
                 tracing::debug!(?v);
-                (v, ptr + 4)
+                (v, ptr + std::mem::size_of::<$ty>())
             }
 
             fn load_flat<E: WasmEngine, T>(

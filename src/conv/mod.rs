@@ -114,253 +114,8 @@ pub trait Lower: ComponentType {
     }
 }
 
-impl Lower for Value {
-    fn store<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        memory: &Memory,
-        ptr: usize,
-    ) -> usize {
-        match self {
-            Value::S32(v) => v.store(cx, memory, ptr),
-            Value::String(v) => v.store(cx, memory, ptr),
-            Value::List(v) => v.store(cx, memory, ptr),
-            _ => {
-                todo!()
-            }
-        }
-    }
-
-    fn store_flat<E: WasmEngine, T>(
-        &self,
-        cx: &mut LowerContext<'_, '_, E, T>,
-        dst: &mut Vec<wasm_runtime_layer::Value>,
-    ) {
-        // let inner = &mut cx.store.inner;
-        // let memory = &cx.memory;
-
-        match self {
-            Value::S32(v) => v.store_flat(cx, dst),
-            Value::String(v) => v.store_flat(cx, dst),
-            Value::List(v) => v.store_flat(cx, dst),
-            _ => {
-                todo!()
-            }
-        }
-    }
-}
-
-impl Lift for Value {
-    fn load<E: WasmEngine, T>(
-        cx: &mut LiftContext<'_, '_, E, T>,
-        memory: &Memory,
-        ty: &mut dyn PeekableIter<Item = &Type>,
-        ptr: usize,
-    ) -> (Self, usize) {
-        match ty.next().unwrap() {
-            Type::S32 => {
-                let (v, ptr) = i32::load(cx, memory, ty, ptr);
-                (Value::S32(v), ptr)
-            }
-            Type::String => {
-                let (v, ptr) = String::load(cx, memory, ty, ptr);
-                (Value::String(v.into()), ptr)
-            }
-            &Type::Id(id) => match &cx.resolve.types[id].kind {
-                wit_parser::TypeDefKind::Record(v) => {
-                    let mut args = Vec::new();
-                    let mut ptr = ptr;
-
-                    for field in v.fields.iter() {
-                        let (v, p) = Value::load(
-                            cx,
-                            memory,
-                            &mut slice::from_ref(&field.ty).iter().peekable(),
-                            ptr,
-                        );
-
-                        args.push((Arc::from(field.name.as_str()), v));
-                        ptr = p;
-                    }
-
-                    let ValueType::Record(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
-                    (
-                        Value::Record(crate::Record::new(ty.clone(), args).unwrap()),
-                        ptr,
-                    )
-                }
-                wit_parser::TypeDefKind::Tuple(v) => {
-                    let mut args = Vec::new();
-                    let mut ptr = ptr;
-
-                    for ty in v.types.iter() {
-                        let (v, p) = Value::load(
-                            cx,
-                            memory,
-                            &mut slice::from_ref(ty).iter().peekable(),
-                            ptr,
-                        );
-
-                        args.push(v);
-                        ptr = p;
-                    }
-
-                    let ValueType::Tuple(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
-                    (Value::Tuple(Tuple::new(ty.clone(), args).unwrap()), ptr)
-                }
-                wit_parser::TypeDefKind::List(list_ty) => {
-                    let ((b_ptr, len), new_ptr) = <(i32, i32)>::load(cx, memory, ty, ptr);
-
-                    let mut ptr = b_ptr as usize;
-                    let values: Vec<_> = (0..len)
-                        .map(|idx| {
-                            tracing::debug!(?idx);
-                            let (v, p) = Value::load(
-                                cx,
-                                memory,
-                                &mut slice::from_ref(list_ty).iter().peekable(),
-                                ptr,
-                            );
-                            ptr = p;
-
-                            v
-                        })
-                        .collect();
-
-                    let ValueType::List(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
-                    (Value::List(List::new(ty.clone(), values).unwrap()), new_ptr)
-                }
-                wit_parser::TypeDefKind::Variant(_) => todo!(),
-                wit_parser::TypeDefKind::Enum(_) => todo!(),
-                wit_parser::TypeDefKind::Option(_) => todo!(),
-                wit_parser::TypeDefKind::Result(_) => todo!(),
-                wit_parser::TypeDefKind::Resource => todo!(),
-                wit_parser::TypeDefKind::Handle(_) => todo!(),
-                wit_parser::TypeDefKind::Flags(_) => todo!(),
-                wit_parser::TypeDefKind::Future(_) => todo!(),
-                wit_parser::TypeDefKind::Stream(_) => todo!(),
-                wit_parser::TypeDefKind::Type(_) => todo!(),
-                wit_parser::TypeDefKind::Unknown => todo!(),
-            },
-            _ => todo!(),
-        }
-    }
-
-    fn load_flat<E: WasmEngine, T>(
-        cx: &mut LiftContext<'_, '_, E, T>,
-        ty: &mut dyn PeekableIter<Item = &Type>,
-        args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
-    ) -> Self {
-        match ty.next().unwrap() {
-            Type::S32 => Value::S32(i32::load_flat(cx, ty, args)),
-            Type::String => Value::String(String::load_flat(cx, ty, args).into()),
-            &Type::Id(id) => match &cx.resolve.types[id].kind {
-                wit_parser::TypeDefKind::Record(v) => {
-                    let mut res = Vec::new();
-
-                    for field in v.fields.iter() {
-                        let v = Value::load_flat(
-                            cx,
-                            &mut slice::from_ref(&field.ty).iter().peekable(),
-                            args,
-                        );
-
-                        res.push((Arc::from(field.name.as_str()), v));
-                    }
-
-                    let ValueType::Record(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
-                    Value::Record(crate::Record::new(ty.clone(), res).unwrap())
-                }
-                wit_parser::TypeDefKind::Tuple(v) => {
-                    let mut res = Vec::new();
-
-                    for ty in v.types.iter() {
-                        let v =
-                            Value::load_flat(cx, &mut slice::from_ref(ty).iter().peekable(), args);
-
-                        res.push(v);
-                    }
-
-                    let ValueType::Tuple(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
-                    Value::Tuple(Tuple::new(ty.clone(), res).unwrap())
-                }
-                wit_parser::TypeDefKind::List(list_ty) => {
-                    let memory = cx.memory.unwrap();
-
-                    let (b_ptr, len) = <(i32, i32)>::load_flat(cx, ty, args);
-
-                    let mut ptr = b_ptr as usize;
-                    let values: Vec<_> = (0..len)
-                        .map(|idx| {
-                            tracing::debug!(?idx);
-                            let (v, p) = Value::load(
-                                cx,
-                                memory,
-                                &mut slice::from_ref(list_ty).iter().peekable(),
-                                ptr,
-                            );
-                            ptr = p;
-
-                            v
-                        })
-                        .collect();
-
-                    let ValueType::List(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
-                    Value::List(List::new(ty.clone(), values).unwrap())
-                }
-                wit_parser::TypeDefKind::Variant(_) => todo!(),
-                wit_parser::TypeDefKind::Enum(_) => todo!(),
-                wit_parser::TypeDefKind::Option(_) => todo!(),
-                wit_parser::TypeDefKind::Result(_) => todo!(),
-                wit_parser::TypeDefKind::Resource => todo!(),
-                wit_parser::TypeDefKind::Handle(_) => todo!(),
-                wit_parser::TypeDefKind::Flags(_) => todo!(),
-                wit_parser::TypeDefKind::Future(_) => todo!(),
-                wit_parser::TypeDefKind::Stream(_) => todo!(),
-                wit_parser::TypeDefKind::Type(_) => todo!(),
-                wit_parser::TypeDefKind::Unknown => todo!(),
-            },
-            _ => todo!(),
-        }
-    }
-}
-
-impl ComponentType for Value {
-    fn size(&self) -> usize {
-        match self {
-            Value::S32(v) => v.size(),
-            _ => todo!(),
-        }
-    }
-
-    fn align(&self) -> usize {
-        match self {
-            Value::S32(v) => v.align(),
-            _ => todo!(),
-        }
-    }
-}
-
 /// Aligns a pointer to the given alignment
-fn align_to(ptr: usize, align: usize) -> usize {
+pub(crate) fn align_to(ptr: usize, align: usize) -> usize {
     // https://en.wikipedia.org/wiki/Data_structure_alignment#Computing_padding
     (ptr + (align - 1)) & !(align - 1)
 }
@@ -463,11 +218,29 @@ impl ComponentType for () {
     }
 }
 
+impl Lower for () {
+    fn store<E: WasmEngine, T>(
+        &self,
+        _: &mut LowerContext<'_, '_, E, T>,
+        _: &Memory,
+        dst_ptr: usize,
+    ) -> usize {
+        dst_ptr
+    }
+
+    fn store_flat<E: WasmEngine, T>(
+        &self,
+        _: &mut LowerContext<'_, '_, E, T>,
+        _: &mut Vec<wasm_runtime_layer::Value>,
+    ) {
+    }
+}
+
 impl Lift for () {
     fn load<E: WasmEngine, T>(
-        cx: &mut LiftContext<'_, '_, E, T>,
-        memory: &Memory,
-        ty: &mut dyn PeekableIter<Item = &Type>,
+        _: &mut LiftContext<'_, '_, E, T>,
+        _: &Memory,
+        _: &mut dyn PeekableIter<Item = &Type>,
         ptr: usize,
     ) -> (Self, usize)
     where
@@ -477,9 +250,9 @@ impl Lift for () {
     }
 
     fn load_flat<E: WasmEngine, T>(
-        cx: &mut LiftContext<'_, '_, E, T>,
-        ty: &mut dyn PeekableIter<Item = &Type>,
-        args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
+        _: &mut LiftContext<'_, '_, E, T>,
+        _: &mut dyn PeekableIter<Item = &Type>,
+        _: &mut vec::IntoIter<wasm_runtime_layer::Value>,
     ) -> Self {
     }
 }

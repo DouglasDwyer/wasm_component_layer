@@ -558,6 +558,14 @@ impl Enum {
     pub fn ty(&self) -> EnumType {
         self.ty.clone()
     }
+
+    pub(crate) fn size(&self) -> usize {
+        todo!()
+    }
+
+    pub(crate) fn align(&self) -> usize {
+        todo!()
+    }
 }
 
 /// Represents a value or lack thereof.
@@ -589,6 +597,14 @@ impl OptionValue {
     /// Gets the type of this value.
     pub fn ty(&self) -> OptionType {
         self.ty.clone()
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        todo!()
+    }
+
+    pub(crate) fn align(&self) -> usize {
+        todo!()
     }
 }
 
@@ -630,6 +646,14 @@ impl ResultValue {
     /// The type of this result.
     pub fn ty(&self) -> ResultType {
         self.ty.clone()
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        todo!()
+    }
+
+    pub(crate) fn align(&self) -> usize {
+        todo!()
     }
 }
 
@@ -738,6 +762,14 @@ impl Flags {
             .indices
             .get(name.as_ref())
             .expect("Unknown flag name")
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        todo!()
+    }
+
+    pub(crate) fn align(&self) -> usize {
+        todo!()
     }
 }
 
@@ -941,6 +973,14 @@ impl ResourceOwn {
         self.tracker.store(usize::MAX, Ordering::Release);
         Ok(self.rep)
     }
+
+    pub(crate) fn size(&self) -> usize {
+        todo!()
+    }
+
+    pub(crate) fn align(&self) -> usize {
+        todo!()
+    }
 }
 
 impl PartialEq for ResourceOwn {
@@ -1060,6 +1100,14 @@ impl ResourceBorrow {
     /// Gets a reference to the tracker that determines if this resource is dead.
     pub(crate) fn dead_ref(&self) -> Arc<AtomicBool> {
         self.dead.clone()
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        todo!()
+    }
+
+    pub(crate) fn align(&self) -> usize {
+        todo!()
     }
 }
 

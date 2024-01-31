@@ -305,6 +305,34 @@ impl ValueType {
             ValueType::Borrow(v) => v.size(),
         }
     }
+
+    pub(crate) fn align(&self) -> usize {
+        match self {
+            ValueType::Bool => 4,
+            ValueType::S8 => 1,
+            ValueType::U8 => 1,
+            ValueType::S16 => 2,
+            ValueType::U16 => 2,
+            ValueType::S32 => 4,
+            ValueType::U32 => 4,
+            ValueType::S64 => 8,
+            ValueType::U64 => 8,
+            ValueType::F32 => 4,
+            ValueType::F64 => 8,
+            ValueType::Char => 4,
+            ValueType::String => 4,
+            ValueType::List(_) => 4,
+            ValueType::Record(v) => v.align(),
+            ValueType::Tuple(v) => v.align(),
+            ValueType::Variant(v) => v.align(),
+            ValueType::Enum(v) => v.align(),
+            ValueType::Option(v) => v.align(),
+            ValueType::Result(v) => v.align(),
+            ValueType::Flags(v) => v.align(),
+            ValueType::Own(v) => v.align(),
+            ValueType::Borrow(v) => v.align(),
+        }
+    }
 }
 
 /// Describes the type of a list of values, all of the same type.
@@ -442,6 +470,10 @@ impl RecordType {
     fn size(&self) -> usize {
         todo!()
     }
+
+    fn align(&self) -> usize {
+        todo!()
+    }
 }
 
 impl PartialEq for RecordType {
@@ -503,6 +535,10 @@ impl TupleType {
     }
 
     fn size(&self) -> usize {
+        todo!()
+    }
+
+    fn align(&self) -> usize {
         todo!()
     }
 }
@@ -619,8 +655,57 @@ impl VariantType {
         Ok(Self { name, cases })
     }
 
-    fn size(&self) -> usize {
-        todo!()
+    /// Returns the size of the variant type
+    /// Note: The size is independent of the current variant
+    pub(crate) fn size(&self) -> usize {
+        let s = self.determinant_size();
+
+        crate::conv::align_to(s + self.value_size(), self.value_align())
+    }
+
+    pub(crate) fn align(&self) -> usize {
+        self.determinant_align().max(self.value_align())
+    }
+
+    pub(crate) fn value_size(&self) -> usize {
+        self.cases()
+            .iter()
+            .flat_map(|v| Some(v.ty()?.size()))
+            .max()
+            // NOTE: Variants must by the current specification have at least one case,
+            // see:
+            // <https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#item-variant-one-of-a-set-of-types>.
+            //
+            // In this case, we are more lenient in what we accept, and allow for zero cases.
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn value_align(&self) -> usize {
+        self.cases()
+            .iter()
+            .flat_map(|v| Some(v.ty()?.align()))
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn determinant_size(&self) -> usize {
+        match ((self.cases().len() as f32).log2() / 8.0).ceil() as u32 {
+            0 => 1,
+            1 => 1,
+            2 => 2,
+            3 => 4,
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn determinant_align(&self) -> usize {
+        match ((self.cases().len() as f32).log2() / 8.0).ceil() as u32 {
+            0 => 1,
+            1 => 1,
+            2 => 2,
+            3 => 4,
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -693,6 +778,10 @@ impl EnumType {
     fn size(&self) -> usize {
         todo!()
     }
+
+    fn align(&self) -> usize {
+        todo!()
+    }
 }
 
 impl PartialEq for EnumType {
@@ -731,6 +820,10 @@ impl OptionType {
     fn size(&self) -> usize {
         todo!()
     }
+
+    fn align(&self) -> usize {
+        todo!()
+    }
 }
 
 /// A type that denotes successful or unsuccessful operation.
@@ -760,6 +853,10 @@ impl ResultType {
     }
 
     fn size(&self) -> usize {
+        todo!()
+    }
+
+    fn align(&self) -> usize {
         todo!()
     }
 }
@@ -828,6 +925,10 @@ impl FlagsType {
     }
 
     fn size(&self) -> usize {
+        todo!()
+    }
+
+    fn align(&self) -> usize {
         todo!()
     }
 }
@@ -1003,6 +1104,10 @@ impl ResourceType {
     }
 
     fn size(&self) -> usize {
+        todo!()
+    }
+
+    fn align(&self) -> usize {
         todo!()
     }
 }
