@@ -4,7 +4,10 @@ use std::cell::*;
 
 use anyhow::*;
 pub use wit_parser::abi::{AbiVariant, WasmSignature, WasmType};
-use wit_parser::*;
+use wit_parser::{
+    Enum, Flags, FlagsRepr, Function, Handle, Int, Record, Resolve, Result_, Results, SizeAlign,
+    Tuple, Type, TypeDefKind, TypeId, Variant,
+};
 
 /// Joins two WASM types.
 fn join(a: WasmType, b: WasmType) -> WasmType {

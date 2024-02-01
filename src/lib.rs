@@ -115,7 +115,9 @@ pub use wasm_runtime_layer::Engine;
 use wasm_runtime_layer::{backend, Extern, ExternType, Global, Imports, Module};
 use wasmtime_environ::component::*;
 use wit_component::*;
-use wit_parser::*;
+use wit_parser::{
+    Function, Handle, Resolve, SizeAlign, Type, TypeDefKind, TypeOwner, World, WorldItem, WorldKey,
+};
 
 pub use crate::func::Func;
 pub use crate::func::*;

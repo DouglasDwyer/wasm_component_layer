@@ -1,9 +1,11 @@
-use std::sync::*;
+use std::sync::Arc;
 
-use anyhow::*;
+use anyhow::{Error, Ok, Result};
+
 #[cfg(feature = "serde")]
 use serde::*;
-use wit_parser::*;
+
+use wit_parser::validate_id;
 
 /// Describes the name of a component type.
 #[derive(Clone, Hash, PartialEq, Eq)]
