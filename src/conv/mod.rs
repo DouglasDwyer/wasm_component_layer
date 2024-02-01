@@ -126,7 +126,7 @@ macro_rules! tuple_impl {
         impl<$($t: ComponentType,)*> ComponentType for ($($t,)*) {
             fn size(&self) -> usize {
                 let mut s = 0;
-                $(s = align_to(s + self.$idx.size(), self.$idx.align());)*
+                $(s = align_to(s , self.$idx.align())+ self.$idx.size();)*
 
                 s
             }

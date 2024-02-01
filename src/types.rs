@@ -10,6 +10,7 @@ use id_arena::*;
 #[cfg(feature = "serde")]
 use serde::*;
 
+use crate::conv::align_to;
 use crate::values::ComponentType;
 use crate::TypeIdentifier;
 use crate::{require_matches, UnaryComponentType};
@@ -468,11 +469,19 @@ impl RecordType {
     }
 
     fn size(&self) -> usize {
-        todo!()
+        self.fields
+            .iter()
+            .fold(0, |acc, (_, _, ty)| align_to(acc, ty.align()) + ty.size())
     }
 
     fn align(&self) -> usize {
-        todo!()
+        self.fields
+            .iter()
+            .map(|(_, _, ty)| ty.align())
+            .max()
+            // NOTE: same here, the component model spec *technically* disallows empty types, but
+            // previously accepted them. Rather than panic, choose to be more accepting
+            .unwrap_or(0)
     }
 }
 
@@ -660,7 +669,7 @@ impl VariantType {
     pub(crate) fn size(&self) -> usize {
         let s = self.determinant_size();
 
-        crate::conv::align_to(s + self.value_size(), self.value_align())
+        crate::conv::align_to(s, self.value_align()) + self.value_size()
     }
 
     pub(crate) fn align(&self) -> usize {

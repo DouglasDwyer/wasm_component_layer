@@ -192,13 +192,30 @@ impl Lower for Value {
         ptr: usize,
     ) -> usize {
         match self {
+            Value::Bool(v) => v.store(cx, memory, ptr),
+            Value::S8(v) => v.store(cx, memory, ptr),
+            Value::U8(v) => v.store(cx, memory, ptr),
+            Value::S16(v) => v.store(cx, memory, ptr),
+            Value::U16(v) => v.store(cx, memory, ptr),
             Value::S32(v) => v.store(cx, memory, ptr),
+            Value::U32(v) => v.store(cx, memory, ptr),
+            Value::S64(v) => v.store(cx, memory, ptr),
+            Value::U64(v) => v.store(cx, memory, ptr),
+            Value::F32(v) => v.store(cx, memory, ptr),
+            Value::F64(v) => v.store(cx, memory, ptr),
+            Value::Char(v) => v.store(cx, memory, ptr),
             Value::String(v) => v.store(cx, memory, ptr),
             Value::List(v) => v.store(cx, memory, ptr),
+            Value::Record(v) => v.store(cx, memory, ptr),
+            Value::Tuple(v) => v.store(cx, memory, ptr),
             Value::Variant(v) => v.store(cx, memory, ptr),
-            _ => {
-                todo!()
-            }
+            _ => todo!(),
+            // Value::Enum(v) => v.store(cx, memory, ptr),
+            // Value::Option(v) => v.store(cx, memory, ptr),
+            // Value::Result(v) => v.store(cx, memory, ptr),
+            // Value::Flags(v) => v.store(cx, memory, ptr),
+            // Value::Own(v) => v.store(cx, memory, ptr),
+            // Value::Borrow(v) => v.store(cx, memory, ptr),
         }
     }
 
@@ -208,13 +225,30 @@ impl Lower for Value {
         dst: &mut Vec<wasm_runtime_layer::Value>,
     ) {
         match self {
+            Value::Bool(v) => v.store_flat(cx, dst),
+            Value::S8(v) => v.store_flat(cx, dst),
+            Value::U8(v) => v.store_flat(cx, dst),
+            Value::S16(v) => v.store_flat(cx, dst),
+            Value::U16(v) => v.store_flat(cx, dst),
             Value::S32(v) => v.store_flat(cx, dst),
+            Value::U32(v) => v.store_flat(cx, dst),
+            Value::S64(v) => v.store_flat(cx, dst),
+            Value::U64(v) => v.store_flat(cx, dst),
+            Value::F32(v) => v.store_flat(cx, dst),
+            Value::F64(v) => v.store_flat(cx, dst),
+            Value::Char(v) => v.store_flat(cx, dst),
             Value::String(v) => v.store_flat(cx, dst),
             Value::List(v) => v.store_flat(cx, dst),
+            Value::Record(v) => v.store_flat(cx, dst),
+            Value::Tuple(v) => v.store_flat(cx, dst),
             Value::Variant(v) => v.store_flat(cx, dst),
-            _ => {
-                todo!()
-            }
+            _ => todo!(),
+            // Value::Enum(v) => v.store_flat(cx, dst),
+            // Value::Option(v) => v.store_flat(cx, dst),
+            // Value::Result(v) => v.store_flat(cx, dst),
+            // Value::Flags(v) => v.store_flat(cx, dst),
+            // Value::Own(v) => v.store_flat(cx, dst),
+            // Value::Borrow(v) => v.store_flat(cx, dst),
         }
     }
 }
@@ -456,21 +490,6 @@ impl ComponentType for Tuple {
     }
 }
 
-impl ComponentType for Record {
-    fn size(&self) -> usize {
-        let mut s = 0;
-        for (_, v) in self.fields() {
-            s = align_to(s + v.size(), v.align());
-        }
-
-        s
-    }
-
-    fn align(&self) -> usize {
-        self.fields().map(|(_, v)| v.align()).max().unwrap_or(0)
-    }
-}
-
 impl ComponentType for Variant {
     fn size(&self) -> usize {
         self.ty().size()
@@ -516,6 +535,48 @@ impl Lower for Variant {
 
         if let Some(value) = self.value() {
             value.store_flat(cx, dst);
+        }
+    }
+}
+
+impl ComponentType for Record {
+    fn size(&self) -> usize {
+        let mut s = 0;
+        for (_, v) in self.fields() {
+            s = align_to(s + v.size(), v.align());
+        }
+
+        s
+    }
+
+    fn align(&self) -> usize {
+        self.fields().map(|(_, v)| v.align()).max().unwrap_or(0)
+    }
+}
+
+impl Lower for Record {
+    fn store<E: WasmEngine, T>(
+        &self,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        memory: &Memory,
+        dst_ptr: usize,
+    ) -> usize {
+        let mut ptr = dst_ptr;
+        for (_, v) in self.fields() {
+            ptr = align_to(ptr, v.align());
+            ptr = v.store(cx, memory, ptr);
+        }
+
+        ptr
+    }
+
+    fn store_flat<E: WasmEngine, T>(
+        &self,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        dst: &mut Vec<wasm_runtime_layer::Value>,
+    ) {
+        for (_, v) in self.fields() {
+            v.store_flat(cx, dst);
         }
     }
 }
