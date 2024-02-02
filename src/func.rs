@@ -1099,7 +1099,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             },
             Instruction::TupleLower { tuple: _, ty: _ } => {
                 let tuple = require_matches!(operands.pop(), Some(Value::Tuple(x)), x);
-                results.extend(tuple.iter().cloned());
+                results.extend(tuple.fields().iter().cloned());
             }
             Instruction::TupleLift { tuple: _, ty } => {
                 results.push(Value::Tuple(crate::values::Tuple::new_unchecked(

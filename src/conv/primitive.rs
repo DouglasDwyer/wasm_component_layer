@@ -355,10 +355,25 @@ impl<V: Lift> Lift for Vec<V> {
         let ((b_ptr, len), new_ptr) = <(i32, i32)>::load(cx, memory, ty, ptr);
 
         let mut ptr = b_ptr as usize;
+
+        let Some(Type::Id(id)) = ty.next() else {
+            panic!("missing type");
+        };
+
+        let list_ty = match &cx.resolve.types[*id].kind {
+            wit_parser::TypeDefKind::List(list_ty) => list_ty,
+            ty => panic!("expected list type, found {ty:?}"),
+        };
+
         let res = (0..len)
             .map(|idx| {
                 tracing::debug!(?idx);
-                let (v, p) = V::load(cx, memory, ty, ptr);
+                let (v, p) = V::load(
+                    cx,
+                    memory,
+                    &mut std::slice::from_ref(list_ty).into_iter().peekable(),
+                    ptr,
+                );
                 ptr = p;
 
                 v

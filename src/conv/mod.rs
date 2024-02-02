@@ -3,7 +3,7 @@
 use std::{iter::Peekable, slice, sync::Arc, vec};
 
 use wasm_runtime_layer::{backend::WasmEngine, Func, Memory};
-use wit_parser::{Resolve, Type};
+use wit_parser::{Resolve, Type, TypeDefKind};
 
 use crate::{List, StoreContextMut, Tuple, Value, ValueType};
 
@@ -28,14 +28,10 @@ where
 
 /// A component type representation in guest memory
 pub trait ComponentType {
-    /// Returns the current type
+    /// Returns the size including padding bytes of the type
     fn size(&self) -> usize;
     /// Returns the alignment of the type
     fn align(&self) -> usize;
-    /// Returns the stride of the type
-    fn stride(&self) -> usize {
-        align_to(self.size(), self.align())
-    }
 }
 
 /// Converts a value from the guest to the host
@@ -46,6 +42,14 @@ pub trait Lift: ComponentType {
     /// Reads the value from guest memory
     ///
     /// `ty` is used to infer the type to load for dynamically typed destination types, such as
+    ///
+    /// NOTE: `ptr` must be aligned to the type's alignment on call.
+    ///
+    /// The return value consists of the lifter value, and the new pointer to the end of the read.
+    ///
+    /// Caller must ensure the passed pointer is properly aligned in accordance with the types
+    /// alignment requirement. The returned pointer is guaranteed by the callee to be aligned and
+    /// point the next element of the type after the read.
     /// [`Value`].
     fn load<E: WasmEngine, T>(
         cx: &mut LiftContext<'_, '_, E, T>,
@@ -167,12 +171,25 @@ macro_rules! tuple_impl {
             where
                 Self: Sized,
             {
+                let mut max_align = 0;
+
+
+
+                let tuple_ty = extract_tuple(cx, ty.next().unwrap()).unwrap();
+                let field_types = &mut tuple_ty.types.iter().peekable();
+
                 $(
                     #[allow(non_snake_case)]
-                    let ($t, ptr) = $t::load(cx, memory, ty, ptr);
+                    let ($t, ptr) = $t::load(cx, memory, field_types, ptr);
+                    let align = $t.align();
+
+                    // TODO: could we use `mem::align_of` here and assume that rusts type
+                    // alignment is identical to the component model?
+                    max_align = max_align.max(align);
+                    let ptr = align_to(ptr, align);
                 )*
 
-                (($($t,)*), ptr)
+                (($($t,)*), align_to(ptr, max_align))
             }
 
             fn load_flat<En: WasmEngine, T>(
@@ -305,4 +322,30 @@ pub(crate) fn alloc_list<E: WasmEngine, T>(
     };
 
     Ok(ptr)
+}
+
+pub(crate) fn extract_tuple<'a, E: WasmEngine, T>(
+    cx: &LiftContext<'a, '_, E, T>,
+    ty: &wit_parser::Type,
+) -> Option<&'a wit_parser::Tuple> {
+    match ty {
+        Type::Id(id) => match &cx.resolve.types[*id].kind {
+            wit_parser::TypeDefKind::Tuple(ty) => Some(ty),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub(crate) fn extract_list<E: WasmEngine, T>(
+    cx: &LiftContext<'_, '_, E, T>,
+    ty: &wit_parser::Type,
+) -> Option<Type> {
+    match ty {
+        Type::Id(id) => match &cx.resolve.types[*id].kind {
+            wit_parser::TypeDefKind::List(ty) => Some(*ty),
+            _ => None,
+        },
+        _ => None,
+    }
 }

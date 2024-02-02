@@ -279,6 +279,8 @@ impl ValueType {
         })
     }
 
+    /// TODO: this call may be expensive for recursive compound types, and should be stored within
+    /// the type itself in the future.
     pub(crate) fn size(&self) -> usize {
         match self {
             ValueType::Bool => 4,
@@ -307,6 +309,8 @@ impl ValueType {
         }
     }
 
+    /// TODO: this call may be expensive for recursive compound types, and should be stored within
+    /// the type itself in the future.
     pub(crate) fn align(&self) -> usize {
         match self {
             ValueType::Bool => 4,
@@ -468,13 +472,13 @@ impl RecordType {
         })
     }
 
-    fn size(&self) -> usize {
+    pub(crate) fn size(&self) -> usize {
         self.fields
             .iter()
             .fold(0, |acc, (_, _, ty)| align_to(acc, ty.align()) + ty.size())
     }
 
-    fn align(&self) -> usize {
+    pub(crate) fn align(&self) -> usize {
         self.fields
             .iter()
             .map(|(_, _, ty)| ty.align())
@@ -543,12 +547,20 @@ impl TupleType {
         Ok(Self { name, fields })
     }
 
-    fn size(&self) -> usize {
-        todo!()
+    pub(crate) fn size(&self) -> usize {
+        self.fields
+            .iter()
+            .fold(0, |acc, ty| align_to(acc, ty.align()) + ty.size())
     }
 
-    fn align(&self) -> usize {
-        todo!()
+    pub(crate) fn align(&self) -> usize {
+        self.fields
+            .iter()
+            .map(|ty| ty.align())
+            .max()
+            // NOTE: same here, the component model spec *technically* disallows empty types, but
+            // previously accepted them. Rather than panic, choose to be more accepting
+            .unwrap_or(0)
     }
 }
 

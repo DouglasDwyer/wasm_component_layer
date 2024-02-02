@@ -3,10 +3,7 @@
 
 use std::{slice, sync::Arc, vec};
 
-use wasm_runtime_layer::{
-    backend::{WasmEngine, WasmFunc, WasmGlobal, WasmMemory},
-    Memory,
-};
+use wasm_runtime_layer::{backend::WasmEngine, Memory};
 use wit_parser::Type;
 
 use crate::{private::ListSpecialization, List, Record, Tuple, Value, ValueType, Variant};
@@ -38,19 +35,19 @@ impl Lower for List {
 
         let ptr = alloc_list(cx, size as i32, 4).unwrap() as usize;
         let end_ptr = match self.values() {
+            ListSpecialization::S8(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::U8(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::S16(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::U16(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::S32(v) => Lower::store_list(v, cx, memory, ptr as usize),
-            ListSpecialization::Other(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::U32(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::S64(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::U64(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::F32(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::F64(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::Other(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::Char(v) => Lower::store_list(v, cx, memory, ptr as usize),
             ListSpecialization::Bool(v) => Lower::store_list(v, cx, memory, ptr as usize),
-            ListSpecialization::S8(v) => Lower::store_list(v, cx, memory, ptr as usize),
-            ListSpecialization::U8(v) => Lower::store_list(v, cx, memory, ptr as usize),
-            ListSpecialization::S16(v) => Lower::store_list(v, cx, memory, ptr as usize),
-            ListSpecialization::U16(v) => Lower::store_list(v, cx, memory, ptr as usize),
         };
 
         // Checks that the size and align of the list element matches the stride of the list
@@ -81,46 +78,20 @@ impl Lower for List {
 
         let ptr = alloc_list(cx, size as i32, 8).unwrap();
         match self.values() {
-            ListSpecialization::S32(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::Other(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::U32(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::S64(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::U64(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::F32(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::F64(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::Char(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::Bool(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::S8(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::U8(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::S16(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-            ListSpecialization::U16(v) => {
-                Lower::store_list(v, cx, memory, ptr as usize);
-            }
-        }
+            ListSpecialization::S8(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::U8(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::S16(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::U16(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::S32(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::U32(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::S64(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::U64(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::F32(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::F64(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::Other(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::Char(v) => Lower::store_list(v, cx, memory, ptr as usize),
+            ListSpecialization::Bool(v) => Lower::store_list(v, cx, memory, ptr as usize),
+        };
 
         (ptr, self.len() as i32).store_flat(cx, dst_ptr)
     }
@@ -210,12 +181,6 @@ impl Lower for Value {
             Value::Tuple(v) => v.store(cx, memory, ptr),
             Value::Variant(v) => v.store(cx, memory, ptr),
             _ => todo!(),
-            // Value::Enum(v) => v.store(cx, memory, ptr),
-            // Value::Option(v) => v.store(cx, memory, ptr),
-            // Value::Result(v) => v.store(cx, memory, ptr),
-            // Value::Flags(v) => v.store(cx, memory, ptr),
-            // Value::Own(v) => v.store(cx, memory, ptr),
-            // Value::Borrow(v) => v.store(cx, memory, ptr),
         }
     }
 
@@ -243,12 +208,6 @@ impl Lower for Value {
             Value::Tuple(v) => v.store_flat(cx, dst),
             Value::Variant(v) => v.store_flat(cx, dst),
             _ => todo!(),
-            // Value::Enum(v) => v.store_flat(cx, dst),
-            // Value::Option(v) => v.store_flat(cx, dst),
-            // Value::Result(v) => v.store_flat(cx, dst),
-            // Value::Flags(v) => v.store_flat(cx, dst),
-            // Value::Own(v) => v.store_flat(cx, dst),
-            // Value::Borrow(v) => v.store_flat(cx, dst),
         }
     }
 }
@@ -260,36 +219,73 @@ impl Lift for Value {
         ty: &mut dyn PeekableIter<Item = &Type>,
         mut ptr: usize,
     ) -> (Self, usize) {
-        match ty.next().unwrap() {
+        match ty.peek().unwrap() {
+            Type::S8 => {
+                let (v, ptr) = i8::load(cx, memory, ty, ptr);
+                (Value::S8(v), ptr)
+            }
+            Type::U8 => {
+                let (v, ptr) = u8::load(cx, memory, ty, ptr);
+                (Value::U8(v), ptr)
+            }
+            Type::S16 => {
+                let (v, ptr) = i16::load(cx, memory, ty, ptr);
+                (Value::S16(v), ptr)
+            }
+            Type::U16 => {
+                let (v, ptr) = u16::load(cx, memory, ty, ptr);
+                (Value::U16(v), ptr)
+            }
             Type::S32 => {
                 let (v, ptr) = i32::load(cx, memory, ty, ptr);
                 (Value::S32(v), ptr)
+            }
+            Type::U32 => {
+                let (v, ptr) = u32::load(cx, memory, ty, ptr);
+                (Value::U32(v), ptr)
+            }
+            Type::S64 => {
+                let (v, ptr) = i64::load(cx, memory, ty, ptr);
+                (Value::S64(v), ptr)
+            }
+            Type::U64 => {
+                let (v, ptr) = u64::load(cx, memory, ty, ptr);
+                (Value::U64(v), ptr)
+            }
+            Type::Float32 => {
+                let (v, ptr) = f32::load(cx, memory, ty, ptr);
+                (Value::F32(v), ptr)
+            }
+            Type::Float64 => {
+                let (v, ptr) = f64::load(cx, memory, ty, ptr);
+                (Value::F64(v), ptr)
             }
             Type::String => {
                 let (v, ptr) = String::load(cx, memory, ty, ptr);
                 (Value::String(v.into()), ptr)
             }
-            &Type::Id(id) => match &cx.resolve.types[id].kind {
+            &Type::Id(id) => match &cx.resolve.types[*id].kind {
                 wit_parser::TypeDefKind::Record(v) => {
                     let mut args = Vec::new();
                     let mut ptr = ptr;
 
-                    for field in v.fields.iter() {
+                    let ValueType::Record(ty) = &cx.types[id.index()] else {
+                        panic!("Invalid type");
+                    };
+
+                    for (field, ty) in v.fields.iter().zip(ty.fields.iter()) {
                         let (v, p) = Value::load(
                             cx,
                             memory,
                             &mut slice::from_ref(&field.ty).iter().peekable(),
-                            ptr,
+                            align_to(ptr, ty.2.align()),
                         );
 
                         args.push((Arc::from(field.name.as_str()), v));
                         ptr = p;
                     }
 
-                    let ValueType::Record(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
+                    let ptr = align_to(ptr, ty.align());
                     (
                         Value::Record(crate::Record::new(ty.clone(), args).unwrap()),
                         ptr,
@@ -299,28 +295,48 @@ impl Lift for Value {
                     let mut args = Vec::new();
                     let mut ptr = ptr;
 
-                    for ty in v.types.iter() {
+                    let ValueType::Tuple(ty) = &cx.types[id.index()] else {
+                        panic!("Invalid type");
+                    };
+
+                    assert!(
+                        ptr % ty.align() == 0,
+                        "Tuple not aligned to its alignment. Expected alignment of {}, got pointer {}",
+                        ty.align(),
+                        ptr,
+                    );
+
+                    for (ty, field_ty) in v.types.iter().zip(ty.fields().iter()) {
+                        tracing::info!(?field_ty, "loading tuple field");
                         let (v, p) = Value::load(
                             cx,
                             memory,
                             &mut slice::from_ref(ty).iter().peekable(),
-                            ptr,
+                            align_to(ptr, field_ty.align()),
                         );
 
                         args.push(v);
                         ptr = p;
                     }
 
-                    let ValueType::Tuple(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
-
+                    let ptr = align_to(ptr, ty.align());
                     (Value::Tuple(Tuple::new(ty.clone(), args).unwrap()), ptr)
                 }
                 wit_parser::TypeDefKind::List(list_ty) => {
                     let ((b_ptr, len), new_ptr) = <(i32, i32)>::load(cx, memory, ty, ptr);
 
                     let mut ptr = b_ptr as usize;
+
+                    let ValueType::List(ty) = &cx.types[id.index()] else {
+                        panic!("Invalid type");
+                    };
+
+                    let align = ty.element_ty().align();
+
+                    // The guest code allocation must ensure that the lists allocation is aligned
+                    // to the required alignment of the element type.
+                    debug_assert!(ptr % align == 0, "Memory block backing list type is not allocated with the correct alignment. Expected a block of alignment {align} for type {:?}", ty.element_ty());
+
                     let values: Vec<_> = (0..len)
                         .map(|idx| {
                             tracing::debug!(?idx);
@@ -331,15 +347,15 @@ impl Lift for Value {
                                 ptr,
                             );
 
+                            // Make sure the pointer is aligned for types whose size is not a
+                            // multiple of their alignment. An example of this is (u64, u8), which
+                            // needs 7 bytes of padding to align.
+                            // ptr = align_to(p, align);
                             ptr = p;
 
                             v
                         })
                         .collect();
-
-                    let ValueType::List(ty) = &cx.types[id.index()] else {
-                        panic!("Invalid type");
-                    };
 
                     (Value::List(List::new(ty.clone(), values).unwrap()), new_ptr)
                 }
@@ -419,7 +435,16 @@ impl Lift for Value {
         args: &mut vec::IntoIter<wasm_runtime_layer::Value>,
     ) -> Self {
         match ty.next().unwrap() {
+            Type::S8 => Value::S8(i8::load_flat(cx, ty, args)),
+            Type::U8 => Value::U8(u8::load_flat(cx, ty, args)),
+            Type::S16 => Value::S16(i16::load_flat(cx, ty, args)),
+            Type::U16 => Value::U16(u16::load_flat(cx, ty, args)),
             Type::S32 => Value::S32(i32::load_flat(cx, ty, args)),
+            Type::U32 => Value::U32(u32::load_flat(cx, ty, args)),
+            Type::S64 => Value::S64(i64::load_flat(cx, ty, args)),
+            Type::U64 => Value::U64(u64::load_flat(cx, ty, args)),
+            Type::Float32 => Value::F32(f32::load_flat(cx, ty, args)),
+            Type::Float64 => Value::F64(f64::load_flat(cx, ty, args)),
             Type::String => Value::String(String::load_flat(cx, ty, args).into()),
             &Type::Id(id) => match &cx.resolve.types[id].kind {
                 wit_parser::TypeDefKind::Record(v) => {
@@ -554,6 +579,33 @@ impl ComponentType for Record {
     }
 }
 
+impl Lower for Tuple {
+    fn store<E: WasmEngine, T>(
+        &self,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        memory: &Memory,
+        dst_ptr: usize,
+    ) -> usize {
+        let mut ptr = dst_ptr;
+        for v in self.fields() {
+            ptr = align_to(ptr, v.align());
+            ptr = v.store(cx, memory, ptr);
+        }
+
+        align_to(ptr, self.ty().align())
+    }
+
+    fn store_flat<E: WasmEngine, T>(
+        &self,
+        cx: &mut LowerContext<'_, '_, E, T>,
+        dst: &mut Vec<wasm_runtime_layer::Value>,
+    ) {
+        for v in self.fields() {
+            v.store_flat(cx, dst);
+        }
+    }
+}
+
 impl Lower for Record {
     fn store<E: WasmEngine, T>(
         &self,
@@ -567,7 +619,7 @@ impl Lower for Record {
             ptr = v.store(cx, memory, ptr);
         }
 
-        ptr
+        align_to(ptr, self.ty().align())
     }
 
     fn store_flat<E: WasmEngine, T>(

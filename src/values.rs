@@ -443,6 +443,13 @@ impl Tuple {
             ty,
         }
     }
+
+    /// Returns the fields as a slice
+    /// **NOTE**, be careful using this method for directly byte encoding, as the fields are
+    /// heterogenous and as such do not have a consistent alignment or size (stride).
+    pub(crate) fn fields(&self) -> &[Value] {
+        self.fields.as_ref()
+    }
 }
 
 impl PartialEq for Tuple {
@@ -451,13 +458,13 @@ impl PartialEq for Tuple {
     }
 }
 
-impl Deref for Tuple {
-    type Target = [Value];
+// impl Deref for Tuple {
+//     type Target = [Value];
 
-    fn deref(&self) -> &Self::Target {
-        &self.fields
-    }
-}
+//     fn deref(&self) -> &Self::Target {
+//         &self.fields
+//     }
+// }
 
 impl IntoIterator for Tuple {
     type IntoIter = std::vec::IntoIter<Value>;
