@@ -96,7 +96,7 @@ impl Display for ValueType {
                     first = false;
                 }
                 write!(f, ">")
-            }
+            },
             // tuple<type1, type2, ...>
             ValueType::Tuple(x) => {
                 write!(f, "tuple<")?;
@@ -109,7 +109,7 @@ impl Display for ValueType {
                     first = false;
                 }
                 write!(f, ">")
-            }
+            },
             // variant<case1: type1?, case2: type2?, ...>
             ValueType::Variant(x) => {
                 write!(f, "variant<")?;
@@ -125,7 +125,7 @@ impl Display for ValueType {
                     first = false;
                 }
                 write!(f, ">")
-            }
+            },
             // enum<case1, case2, ...>
             ValueType::Enum(x) => {
                 write!(f, "enum<")?;
@@ -138,7 +138,7 @@ impl Display for ValueType {
                     first = false;
                 }
                 write!(f, ">")
-            }
+            },
             ValueType::Option(x) => write!(f, "option<{}>", x.some_ty()),
             ValueType::Result(x) => {
                 write!(f, "result<")?;
@@ -154,7 +154,7 @@ impl Display for ValueType {
                     write!(f, "unit")?;
                 }
                 write!(f, ">")
-            }
+            },
             // flags<flag1, flag2, ...>
             ValueType::Flags(x) => {
                 write!(f, "flags<")?;
@@ -167,7 +167,7 @@ impl Display for ValueType {
                     first = false;
                 }
                 write!(f, ">")
-            }
+            },
             // own<type>
             ValueType::Own(x) => write!(
                 f,
@@ -240,10 +240,10 @@ impl ValueType {
             },
             wit_parser::TypeDefKind::Flags(x) => {
                 Self::Flags(FlagsType::from_component(name, x, component)?)
-            }
+            },
             wit_parser::TypeDefKind::Tuple(x) => {
                 Self::Tuple(TupleType::from_component(name, x, component, resource_map)?)
-            }
+            },
             wit_parser::TypeDefKind::Variant(x) => Self::Variant(VariantType::from_component(
                 name,
                 x,
@@ -252,7 +252,7 @@ impl ValueType {
             )?),
             wit_parser::TypeDefKind::Enum(x) => {
                 Self::Enum(EnumType::from_component(name, x, component)?)
-            }
+            },
             wit_parser::TypeDefKind::Option(x) => Self::Option(OptionType::new(
                 Self::from_component(x, component, resource_map)?,
             )),
@@ -1047,11 +1047,11 @@ impl Hash for ResourceKindValue {
             ResourceKindValue::Abstract { id, component } => {
                 id.hash(state);
                 component.hash(state);
-            }
+            },
             ResourceKindValue::Instantiated { id, instance } => {
                 id.hash(state);
                 instance.hash(state);
-            }
+            },
             ResourceKindValue::Host { resource_id, .. } => resource_id.hash(state),
         }
     }

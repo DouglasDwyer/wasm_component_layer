@@ -307,7 +307,7 @@ impl Component {
                             );
                         }
                     }
-                }
+                },
                 WorldItem::Interface(x) => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
@@ -328,8 +328,8 @@ impl Component {
                             );
                         }
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -357,7 +357,7 @@ impl Component {
                             );
                         }
                     }
-                }
+                },
                 WorldItem::Interface(x) => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
@@ -378,8 +378,8 @@ impl Component {
                             );
                         }
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -443,7 +443,7 @@ impl Component {
             match initializer {
                 GlobalInitializer::InstantiateModule(InstantiateModule::Static(idx, _def)) => {
                     inner.instance_modules.push(*idx);
-                }
+                },
                 GlobalInitializer::ExtractMemory(ExtractMemory { index, export }) => {
                     ensure!(
                         inner
@@ -452,7 +452,7 @@ impl Component {
                             .is_none(),
                         "Extracted the same memory more than once."
                     );
-                }
+                },
                 GlobalInitializer::ExtractRealloc(ExtractRealloc { index, def }) => {
                     if let CoreDef::Export(export) = def {
                         ensure!(
@@ -465,7 +465,7 @@ impl Component {
                     } else {
                         bail!("Unexpected post return definition type.");
                     }
-                }
+                },
                 GlobalInitializer::ExtractPostReturn(ExtractPostReturn { index, def }) => {
                     if let CoreDef::Export(export) = def {
                         ensure!(
@@ -478,7 +478,7 @@ impl Component {
                     } else {
                         bail!("Unexpected post return definition type.");
                     }
-                }
+                },
                 GlobalInitializer::LowerImport { index, import } => {
                     let (idx, lowering_opts, index_ty) = lowering_options[*index];
                     let (import_index, path) = &inner.translation.component.imports[*import];
@@ -494,7 +494,7 @@ impl Component {
                                 func: func.clone(),
                                 options: lowering_opts.clone(),
                             }
-                        }
+                        },
                         WorldItem::Interface(i) => {
                             assert_eq!(path.len(), 1);
                             let iface = &inner.resolve.interfaces[*i];
@@ -506,7 +506,7 @@ impl Component {
                                 func: func.clone(),
                                 options: lowering_opts.clone(),
                             }
-                        }
+                        },
                         WorldItem::Type(_) => unreachable!(),
                     };
 
@@ -541,7 +541,7 @@ impl Component {
                             .is_none(),
                         "Attempted to insert duplicate import."
                     );
-                }
+                },
                 GlobalInitializer::Resource(x) => {
                     if let Some(destructor) = x.dtor.clone() {
                         ensure!(
@@ -549,7 +549,7 @@ impl Component {
                             "Attempted to define duplicate resource."
                         );
                     }
-                }
+                },
                 _ => bail!("Not yet implemented {initializer:?}."),
             }
         }
@@ -592,16 +592,55 @@ impl Component {
                     lowers.push((idx, options, *lower_ty)) == *index,
                     "Indices did not match."
                 ),
+                Trampoline::Transcoder {
+                    op,
+                    from,
+                    from64,
+                    to,
+                    to64,
+                } => {
+                    if *from64 || *to64 {
+                        bail!("Trampoline::Transcoder is not implemented for memory64");
+                    }
+                    match op {
+                        Transcode::Copy(FixedEncoding::Utf8) => {
+                            output_trampolines.insert(
+                                idx,
+                                GeneratedTrampoline::Utf8CopyTranscoder {
+                                    from: *from,
+                                    to: *to,
+                                },
+                            );
+                        },
+                        transcode => {
+                            bail!("Trampoline::Transcoder is not implemented for {transcode:?}")
+                        },
+                    }
+                },
+                Trampoline::AlwaysTrap => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::AlwaysTrap);
+                },
                 Trampoline::ResourceNew(x) => {
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceNew(*x));
-                }
+                },
                 Trampoline::ResourceRep(x) => {
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceRep(*x));
-                }
+                },
                 Trampoline::ResourceDrop(x) => {
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceDrop(*x, None));
-                }
-                _ => bail!("Trampoline not implemented."),
+                },
+                Trampoline::ResourceTransferOwn => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferOwn);
+                },
+                Trampoline::ResourceTransferBorrow => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferBorrow);
+                },
+                Trampoline::ResourceEnterCall => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceEnterCall);
+                },
+                Trampoline::ResourceExitCall => {
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceExitCall);
+                },
             }
         }
         Ok(lowers)
@@ -689,7 +728,7 @@ impl Component {
                             .is_none(),
                         "Duplicate function definition."
                     );
-                }
+                },
                 wasmtime_environ::component::Export::Instance { exports, .. } => {
                     let id = match item {
                         WorldItem::Interface(id) => *id,
@@ -748,18 +787,18 @@ impl Component {
                             "Duplicate function definition."
                         );
                     }
-                }
+                },
 
                 // ignore type exports for now
-                wasmtime_environ::component::Export::Type(_) => {}
+                wasmtime_environ::component::Export::Type(_) => {},
 
                 // This can't be tested at this time so leave it unimplemented
                 wasmtime_environ::component::Export::ModuleStatic(_) => {
                     bail!("Not yet implemented.")
-                }
+                },
                 wasmtime_environ::component::Export::ModuleImport { .. } => {
                     bail!("Not yet implemented.")
-                }
+                },
             }
         }
 
@@ -808,25 +847,25 @@ impl Component {
         let Type::Id(id) = ty else { return };
         match (&resolve.types[*id].kind, iface_ty) {
             (TypeDefKind::Flags(_), InterfaceType::Flags(_))
-            | (TypeDefKind::Enum(_), InterfaceType::Enum(_)) => {}
+            | (TypeDefKind::Enum(_), InterfaceType::Enum(_)) => {},
             (TypeDefKind::Record(t1), InterfaceType::Record(t2)) => {
                 let t2 = &types[*t2];
                 for (f1, f2) in t1.fields.iter().zip(t2.fields.iter()) {
                     Self::connect_resources(resolve, types, &f1.ty, &f2.ty, map);
                 }
-            }
+            },
             (
                 TypeDefKind::Handle(Handle::Own(t1) | Handle::Borrow(t1)),
                 InterfaceType::Own(t2) | InterfaceType::Borrow(t2),
             ) => {
                 map[t1.index()] = *t2;
-            }
+            },
             (TypeDefKind::Tuple(t1), InterfaceType::Tuple(t2)) => {
                 let t2 = &types[*t2];
                 for (f1, f2) in t1.types.iter().zip(t2.types.iter()) {
                     Self::connect_resources(resolve, types, f1, f2, map);
                 }
-            }
+            },
             (TypeDefKind::Variant(t1), InterfaceType::Variant(t2)) => {
                 let t2 = &types[*t2];
                 for (f1, f2) in t1.cases.iter().zip(t2.cases.iter()) {
@@ -834,11 +873,11 @@ impl Component {
                         Self::connect_resources(resolve, types, t1, f2.ty.as_ref().unwrap(), map);
                     }
                 }
-            }
+            },
             (TypeDefKind::Option(t1), InterfaceType::Option(t2)) => {
                 let t2 = &types[*t2];
                 Self::connect_resources(resolve, types, t1, &t2.ty, map);
-            }
+            },
             (TypeDefKind::Result(t1), InterfaceType::Result(t2)) => {
                 let t2 = &types[*t2];
                 if let Some(t1) = &t1.ok {
@@ -847,14 +886,14 @@ impl Component {
                 if let Some(t1) = &t1.err {
                     Self::connect_resources(resolve, types, t1, &t2.err.unwrap(), map);
                 }
-            }
+            },
             (TypeDefKind::List(t1), InterfaceType::List(t2)) => {
                 let t2 = &types[*t2];
                 Self::connect_resources(resolve, types, t1, &t2.element, map);
-            }
+            },
             (TypeDefKind::Type(ty), _) => {
                 Self::connect_resources(resolve, types, ty, iface_ty, map);
-            }
+            },
             (_, _) => unreachable!(),
         }
     }
@@ -1163,7 +1202,10 @@ impl Instance {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
-        for _i in 0..component.0.instance_modules.len() {
+        println!("{:?}", component.0.instance_modules);
+        for _i in 0..component.0.instance_modules.len() + 10
+        /* ??? */
+        {
             instance_flags.push(Global::new(
                 ctx.as_context_mut().inner,
                 wasm_runtime_layer::Value::I32(
@@ -1173,6 +1215,7 @@ impl Instance {
                 true,
             ));
         }
+        println!("{:?}", instance_flags);
 
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(id, component, linker)?;
@@ -1271,14 +1314,14 @@ impl Instance {
                 TypeDefKind::Resource => {
                     types.push(crate::types::ValueType::Bool);
                     continue;
-                }
+                },
                 TypeDefKind::Type(Type::Id(x)) => {
                     if component.0.resolve.types[x].kind == TypeDefKind::Resource {
                         types.push(crate::types::ValueType::Bool);
                         continue;
                     }
-                }
-                _ => {}
+                },
+                _ => {},
             };
 
             types.push(crate::types::ValueType::from_component_typedef(
@@ -1510,7 +1553,7 @@ impl Instance {
         match def {
             CoreDef::Export(x) => {
                 Self::core_export(inner, ctx, x).context("Could not find exported function.")
-            }
+            },
             CoreDef::Trampoline(x) => {
                 let ty = if let ExternType::Func(x) = ty {
                     x
@@ -1556,7 +1599,7 @@ impl Instance {
                                 func.call_from_guest(ctx, &guest_options, args, results)
                             },
                         )))
-                    }
+                    },
                     GeneratedTrampoline::ResourceNew(x) => {
                         let x = x.as_u32();
                         let tables = inner.state_table.clone();
@@ -1581,7 +1624,7 @@ impl Instance {
                                 Ok(())
                             },
                         )))
-                    }
+                    },
                     GeneratedTrampoline::ResourceRep(x) => {
                         let x = x.as_u32();
                         let tables = inner.state_table.clone();
@@ -1602,7 +1645,7 @@ impl Instance {
                                 Ok(())
                             },
                         )))
-                    }
+                    },
                     GeneratedTrampoline::ResourceDrop(y, _) => {
                         destructors.push(*x);
                         let x = y.as_u32();
@@ -1642,9 +1685,77 @@ impl Instance {
                                 Ok(())
                             },
                         )))
-                    }
+                    },
+                    GeneratedTrampoline::Utf8CopyTranscoder { from, to } => {
+                        let from = from.as_u32();
+                        let to = to.as_u32();
+                        let ty = ty.with_name(format!("transcode-copy-utf8-{}-{}", from, to));
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                println!("transcode-copy-utf8-{from}-{to}({args:?}, {results:?})");
+                                bail!("transcode-copy-utf8 is not implemented")
+                            },
+                        )))
+                    },
+                    GeneratedTrampoline::AlwaysTrap => {
+                        let ty = ty.with_name("always-trap");
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                println!("always-trap({args:?}, {results:?})");
+                                Err(wasmtime_environ::Trap::AlwaysTrapAdapter.into())
+                            },
+                        )))
+                    },
+                    GeneratedTrampoline::ResourceTransferOwn => {
+                        let ty = ty.with_name("resource-transfer-own");
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                println!("resource-transfer-own({args:?}, {results:?})");
+                                bail!("resource-transfer-own is not implemented")
+                            },
+                        )))
+                    },
+                    GeneratedTrampoline::ResourceTransferBorrow => {
+                        let ty = ty.with_name("resource-transfer-borrow");
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                println!("resource-transfer-borrow({args:?}, {results:?})");
+                                bail!("resource-transfer-borrow is not implemented")
+                            },
+                        )))
+                    },
+                    GeneratedTrampoline::ResourceEnterCall => {
+                        let ty = ty.with_name("resource-enter-call");
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                println!("resource-enter-call({args:?}, {results:?})");
+                                bail!("resource-enter-call is not implemented")
+                            },
+                        )))
+                    },
+                    GeneratedTrampoline::ResourceExitCall => {
+                        let ty = ty.with_name("resource-exit-call");
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                println!("resource-exit-call({args:?}, {results:?})");
+                                bail!("resource-exit-call is not implemented")
+                            },
+                        )))
+                    },
                 }
-            }
+            },
             CoreDef::InstanceFlags(i) => Ok(Extern::Global(inner.instance_flags[*i].clone())),
         }
     }
@@ -1659,7 +1770,7 @@ impl Instance {
             ExportItem::Index(idx) => {
                 &inner.component.0.export_mapping
                     [&inner.component.0.instance_modules[export.instance]][&(*idx).into()]
-            }
+            },
             ExportItem::Name(s) => s,
         };
 
@@ -1693,12 +1804,12 @@ impl Instance {
                         &imports,
                     )?;
                     inner.instances.push(instance);
-                }
-                GlobalInitializer::ExtractMemory(_) => {}
-                GlobalInitializer::ExtractRealloc(_) => {}
-                GlobalInitializer::ExtractPostReturn(_) => {}
-                GlobalInitializer::LowerImport { .. } => {}
-                GlobalInitializer::Resource(_) => {}
+                },
+                GlobalInitializer::ExtractMemory(_) => {},
+                GlobalInitializer::ExtractRealloc(_) => {},
+                GlobalInitializer::ExtractPostReturn(_) => {},
+                GlobalInitializer::LowerImport { .. } => {},
+                GlobalInitializer::Resource(_) => {},
                 _ => bail!("Not yet implemented {initializer:?}."),
             }
         }
@@ -1813,7 +1924,7 @@ impl Instance {
                 Some(Some(func)) => tables[idx.as_u32() as usize].set_destructor(Some(func)),
                 Some(None) => tables[idx.as_u32() as usize]
                     .set_destructor(ctx.as_context().inner.data().drop_host_resource.clone()),
-                _ => {}
+                _ => {},
             }
         }
 
@@ -2206,6 +2317,23 @@ enum GeneratedTrampoline {
     ResourceRep(TypeResourceTableIndex),
     /// The guest would like to drop a resource.
     ResourceDrop(TypeResourceTableIndex, Option<CoreDef>),
+    /// A Utf8 string is copied from one component's memory to the other's.
+    Utf8CopyTranscoder {
+        /// Index of the linear memory from which the string is copied.
+        from: RuntimeMemoryIndex,
+        /// Index of the linear memory to which the string is copied.
+        to: RuntimeMemoryIndex,
+    },
+    /// A degenerate lift/lower combination forces a trap.
+    AlwaysTrap,
+    /// An owned resource is transferred from one table to another.
+    ResourceTransferOwn,
+    /// A borrowed resource is transferred from one table to another.
+    ResourceTransferBorrow,
+    /// A call is being entered, requiring bookkeeping for resource handles.
+    ResourceEnterCall,
+    /// A call is being exited, requiring bookkeeping for resource handles.
+    ResourceExitCall,
 }
 
 /// Represents a resource handle owned by a guest instance.

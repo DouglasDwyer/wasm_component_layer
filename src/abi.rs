@@ -610,7 +610,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                                 align,
                             })?;
                             self.stack.pop().unwrap()
-                        }
+                        },
                     };
                     let mut offset = 0usize;
                     for (nth, (_, ty)) in func.params.iter().enumerate() {
@@ -648,7 +648,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     func,
                     amt: func.results.len(),
                 })?;
-            }
+            },
             LiftLower::LiftArgsLowerResults => {
                 if !sig.indirect_params {
                     // If parameters are not passed indirectly then we lift each
@@ -707,7 +707,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                             })?;
                             let ptr = self.stack.pop().unwrap();
                             self.write_params_to_memory(func.results.iter_types(), ptr, 0)?;
-                        }
+                        },
 
                         // For a guest import this is a function defined in
                         // wasm, so we're returning a pointer where the
@@ -716,7 +716,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         // memory, returning the pointer at the end.
                         AbiVariant::GuestExport => {
                             unimplemented!()
-                        }
+                        },
                     }
                 }
 
@@ -724,7 +724,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     func,
                     amt: sig.results.len(),
                 })?;
-            }
+            },
         }
 
         assert!(
@@ -787,7 +787,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::String => {
                 let realloc = self.list_realloc();
                 self.emit(&StringLower { realloc })
-            }
+            },
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Type(t) => self.lower(t),
                 TypeDefKind::List(element) => {
@@ -816,11 +816,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         }
                         Ok(())
                     }
-                }
+                },
                 TypeDefKind::Handle(handle) => self.emit(&HandleLower { handle, ty: id }),
                 TypeDefKind::Resource => {
                     todo!();
-                }
+                },
                 TypeDefKind::Record(record) => {
                     self.emit(&RecordLower { record, ty: id })?;
                     let values = self
@@ -832,7 +832,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.lower(&field.ty)?;
                     }
                     Ok(())
-                }
+                },
                 TypeDefKind::Tuple(tuple) => {
                     self.emit(&TupleLower { tuple, ty: id })?;
                     let values = self
@@ -844,18 +844,18 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.lower(ty)?;
                     }
                     Ok(())
-                }
+                },
 
                 TypeDefKind::Flags(flags) => self.emit(&FlagsLower { flags, ty: id }),
 
                 TypeDefKind::Variant(v) => {
                     self.lower_variant_arm(ty, v.cases.iter().map(|c| c.ty.as_ref()))
-                }
+                },
                 TypeDefKind::Enum(enum_) => self.emit(&EnumLower { enum_, ty: id }),
                 TypeDefKind::Option(t) => self.lower_variant_arm(ty, [None, Some(t)]),
                 TypeDefKind::Result(r) => {
                     self.lower_variant_arm(ty, [r.ok.as_ref(), r.err.as_ref()])
-                }
+                },
                 TypeDefKind::Future(_) => todo!("lower future"),
                 TypeDefKind::Stream(_) => todo!("lower stream"),
                 TypeDefKind::Unknown => unreachable!(),
@@ -990,11 +990,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                             len,
                         })
                     }
-                }
+                },
                 TypeDefKind::Handle(handle) => self.emit(&HandleLift { handle, ty: id }),
                 TypeDefKind::Resource => {
                     todo!();
-                }
+                },
                 TypeDefKind::Record(record) => {
                     let mut temp = Vec::new();
                     push_wasm(self.resolve, self.variant, ty, &mut temp);
@@ -1009,7 +1009,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.lift(&field.ty)?;
                     }
                     self.emit(&RecordLift { record, ty: id })
-                }
+                },
                 TypeDefKind::Tuple(tuple) => {
                     let mut temp = Vec::new();
                     push_wasm(self.resolve, self.variant, ty, &mut temp);
@@ -1024,7 +1024,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         self.lift(ty)?;
                     }
                     self.emit(&TupleLift { tuple, ty: id })
-                }
+                },
                 TypeDefKind::Flags(flags) => self.emit(&FlagsLift { flags, ty: id }),
 
                 TypeDefKind::Variant(v) => {
@@ -1036,7 +1036,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         discriminant,
                         has_value,
                     })
-                }
+                },
 
                 TypeDefKind::Enum(enum_) => {
                     let variant = ReadI32 {
@@ -1052,7 +1052,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     } else {
                         unreachable!()
                     }
-                }
+                },
 
                 TypeDefKind::Option(t) => {
                     let (discriminant, has_value) = self.lift_variant_arm(ty, [None, Some(t)])?;
@@ -1062,7 +1062,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         discriminant,
                         has_value,
                     })
-                }
+                },
 
                 TypeDefKind::Result(r) => {
                     let (discriminant, has_value) =
@@ -1073,7 +1073,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         discriminant,
                         has_value,
                     })
-                }
+                },
 
                 TypeDefKind::Future(_) => todo!("lift future"),
                 TypeDefKind::Stream(_) => todo!("lift stream"),
@@ -1147,11 +1147,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             // depending on the size of the value written.
             Type::Bool | Type::U8 | Type::S8 => {
                 self.lower_and_emit(ty, addr, &I32Store8 { offset })
-            }
+            },
             Type::U16 | Type::S16 => self.lower_and_emit(ty, addr, &I32Store16 { offset }),
             Type::U32 | Type::S32 | Type::Char => {
                 self.lower_and_emit(ty, addr, &I32Store { offset })
-            }
+            },
             Type::U64 | Type::S64 => self.lower_and_emit(ty, addr, &I64Store { offset }),
             Type::Float32 => self.lower_and_emit(ty, addr, &F32Store { offset }),
             Type::Float64 => self.lower_and_emit(ty, addr, &F64Store { offset }),
@@ -1168,14 +1168,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 TypeDefKind::Record(record) => {
                     self.emit(&RecordLower { record, ty: id })?;
                     self.write_fields_to_memory(record.fields.iter().map(|f| &f.ty), addr, offset)
-                }
+                },
                 TypeDefKind::Resource => {
                     todo!()
-                }
+                },
                 TypeDefKind::Tuple(tuple) => {
                     self.emit(&TupleLower { tuple, ty: id })?;
                     self.write_fields_to_memory(tuple.types.iter(), addr, offset)
-                }
+                },
 
                 TypeDefKind::Flags(f) => {
                     self.lower(ty)?;
@@ -1183,11 +1183,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         FlagsRepr::U8 => {
                             self.stack.push(addr);
                             self.store_intrepr(offset, Int::U8)?;
-                        }
+                        },
                         FlagsRepr::U16 => {
                             self.stack.push(addr);
                             self.store_intrepr(offset, Int::U16)?;
-                        }
+                        },
                         FlagsRepr::U32(n) => {
                             for i in (0..n).rev() {
                                 self.stack.push(addr.clone());
@@ -1195,11 +1195,11 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                                     offset: offset + (i as i32) * 4,
                                 })?;
                             }
-                        }
+                        },
                     }
 
                     Ok(())
-                }
+                },
 
                 // Each case will get its own block, and the first item in each
                 // case is writing the discriminant. After that if we have a
@@ -1214,7 +1214,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
                 TypeDefKind::Option(t) => {
                     self.write_variant_arm_to_memory(offset, addr, Int::U8, [None, Some(t)])
-                }
+                },
 
                 TypeDefKind::Result(r) => self.write_variant_arm_to_memory(
                     offset,
@@ -1227,7 +1227,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                     self.lower(ty)?;
                     self.stack.push(addr);
                     self.store_intrepr(offset, e.tag())
-                }
+                },
 
                 TypeDefKind::Future(_) => todo!("write future to memory"),
                 TypeDefKind::Stream(_) => todo!("write stream to memory"),
@@ -1353,7 +1353,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
                 TypeDefKind::Resource => {
                     todo!();
-                }
+                },
 
                 // Read and lift each field individually, adjusting the offset
                 // as we go along, then aggregate all the fields into the
@@ -1365,23 +1365,23 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         offset,
                     )?;
                     self.emit(&RecordLift { record, ty: id })
-                }
+                },
 
                 TypeDefKind::Tuple(tuple) => {
                     self.read_fields_from_memory(&tuple.types, addr, offset)?;
                     self.emit(&TupleLift { tuple, ty: id })
-                }
+                },
 
                 TypeDefKind::Flags(f) => {
                     match f.repr() {
                         FlagsRepr::U8 => {
                             self.stack.push(addr);
                             self.load_intrepr(offset, Int::U8)?;
-                        }
+                        },
                         FlagsRepr::U16 => {
                             self.stack.push(addr);
                             self.load_intrepr(offset, Int::U16)?;
-                        }
+                        },
                         FlagsRepr::U32(n) => {
                             for i in 0..n {
                                 self.stack.push(addr.clone());
@@ -1389,10 +1389,10 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                                     offset: offset + (i as i32) * 4,
                                 })?;
                             }
-                        }
+                        },
                     }
                     self.lift(ty)
-                }
+                },
 
                 // Each case will get its own block, and we'll dispatch to the
                 // right block based on the `i32.load` we initially perform. Each
@@ -1411,7 +1411,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         discriminant,
                         has_value,
                     })
-                }
+                },
 
                 TypeDefKind::Option(t) => {
                     let (discriminant, has_value) =
@@ -1422,7 +1422,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         discriminant,
                         has_value,
                     })
-                }
+                },
 
                 TypeDefKind::Result(r) => {
                     let (discriminant, has_value) = self.read_variant_arm_from_memory(
@@ -1437,13 +1437,13 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                         has_value,
                         ty: id,
                     })
-                }
+                },
 
                 TypeDefKind::Enum(e) => {
                     self.stack.push(addr);
                     self.load_intrepr(offset, e.tag())?;
                     self.lift(ty)
-                }
+                },
 
                 TypeDefKind::Future(_) => todo!("read future from memory"),
                 TypeDefKind::Stream(_) => todo!("read stream from memory"),
@@ -1590,14 +1590,14 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
         Type::String => {
             result.push(WasmType::I32);
             result.push(WasmType::I32);
-        }
+        },
 
         Type::Id(id) => match &resolve.types[*id].kind {
             TypeDefKind::Type(t) => push_wasm(resolve, variant, t, result),
 
             TypeDefKind::Handle(Handle::Own(_) | Handle::Borrow(_)) => {
                 result.push(WasmType::I32);
-            }
+            },
 
             TypeDefKind::Resource => todo!(),
 
@@ -1605,24 +1605,24 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
                 for field in r.fields.iter() {
                     push_wasm(resolve, variant, &field.ty, result);
                 }
-            }
+            },
 
             TypeDefKind::Tuple(t) => {
                 for ty in t.types.iter() {
                     push_wasm(resolve, variant, ty, result);
                 }
-            }
+            },
 
             TypeDefKind::Flags(r) => {
                 for _ in 0..r.repr().count() {
                     result.push(WasmType::I32);
                 }
-            }
+            },
 
             TypeDefKind::List(_) => {
                 result.push(WasmType::I32);
                 result.push(WasmType::I32);
-            }
+            },
 
             TypeDefKind::Variant(v) => {
                 result.push(v.tag().into());
@@ -1632,27 +1632,27 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
                     v.cases.iter().map(|c| c.ty.as_ref()),
                     result,
                 );
-            }
+            },
 
             TypeDefKind::Enum(e) => result.push(e.tag().into()),
 
             TypeDefKind::Option(t) => {
                 result.push(WasmType::I32);
                 push_wasm_variants(resolve, variant, [None, Some(t)], result);
-            }
+            },
 
             TypeDefKind::Result(r) => {
                 result.push(WasmType::I32);
                 push_wasm_variants(resolve, variant, [r.ok.as_ref(), r.err.as_ref()], result);
-            }
+            },
 
             TypeDefKind::Future(_) => {
                 result.push(WasmType::I32);
-            }
+            },
 
             TypeDefKind::Stream(_) => {
                 result.push(WasmType::I32);
-            }
+            },
 
             TypeDefKind::Unknown => unreachable!(),
         },

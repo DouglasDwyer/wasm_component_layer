@@ -675,7 +675,7 @@ impl Flags {
                 let arr_index = index / u32::BITS;
                 let sub_index = index % u32::BITS;
                 (x[arr_index as usize] >> sub_index) == 1
-            }
+            },
         }
     }
 
@@ -694,7 +694,7 @@ impl Flags {
                 } else {
                     *x &= !(1 << index);
                 }
-            }
+            },
             FlagsList::Multiple(x) => {
                 let list = Arc::make_mut(x);
                 let arr_index = index / u32::BITS;
@@ -705,7 +705,7 @@ impl Flags {
                 } else {
                     *x &= !(1 << sub_index);
                 }
-            }
+            },
         }
     }
 
