@@ -158,12 +158,12 @@ impl Func {
                     instance: i.as_ref().expect("No instance available.").clone(),
                     error,
                 })?)
-            },
+            }
             FuncImpl::HostFunc(idx) => {
                 let callee = ctx.as_context().inner.data().host_functions.get(idx);
                 (callee)(ctx.as_context_mut(), arguments, results)?;
                 self.ty.match_results(results)
-            },
+            }
         }
     }
 
@@ -408,20 +408,20 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         ),
                         Bitcast::I32ToI64 => {
                             require_matches!(op, Value::S32(x), results.push(Value::S64(*x as i64)))
-                        },
+                        }
                         Bitcast::I64ToI32 => {
                             require_matches!(op, Value::S64(x), results.push(Value::S32(*x as i32)))
-                        },
+                        }
                         Bitcast::I64ToF32 => {
                             require_matches!(op, Value::S64(x), results.push(Value::F32(*x as f32)))
-                        },
+                        }
                         Bitcast::F32ToI64 => {
                             require_matches!(op, Value::F32(x), results.push(Value::S64(*x as i64)))
-                        },
+                        }
                         Bitcast::None => results.push(op.clone()),
                     }
                 }
-            },
+            }
             Instruction::ConstZero { tys } => {
                 for t in tys.iter() {
                     match t {
@@ -431,7 +431,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         WasmType::F64 => results.push(Value::F64(0.0)),
                     }
                 }
-            },
+            }
             Instruction::I32Load { offset } => require_matches!(
                 operands.pop(),
                 Some(Value::S32(x)),
@@ -683,7 +683,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
 
                 results.push(Value::S32(ptr));
                 results.push(Value::S32(encoded.len() as i32));
-            },
+            }
             Instruction::ListCanonLower {
                 element,
                 realloc: _,
@@ -719,7 +719,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
 
                 results.push(Value::S32(ptr));
                 results.push(Value::S32(list.len() as i32));
-            },
+            }
             Instruction::ListLower {
                 element,
                 realloc: _,
@@ -750,7 +750,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 }
 
                 results.push(Value::S32(ptr));
-            },
+            }
             Instruction::StringLift => {
                 let memory = self.memory.as_ref().expect("No memory.");
                 let len = require_matches!(operands.pop(), Some(Value::S32(len)), len) as usize;
@@ -764,7 +764,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 match self.encoding {
                     StringEncoding::Utf8 => {
                         results.push(Value::String(String::from_utf8(result)?.into()))
-                    },
+                    }
                     StringEncoding::Utf16 | StringEncoding::CompactUtf16 => {
                         ensure!(result.len() & 0b1 == 0, "Invalid string length");
                         results.push(Value::String(
@@ -780,9 +780,9 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                             )?
                             .into(),
                         ));
-                    },
+                    }
                 }
-            },
+            }
             Instruction::ListCanonLift { element, ty: _ } => {
                 let len = require_matches!(operands.pop(), Some(Value::S32(x)), x);
                 let ptr = require_matches!(operands.pop(), Some(Value::S32(x)), x);
@@ -800,7 +800,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     Type::Float64 => self.load_array::<f64>(ptr as usize, len as usize)?.into(),
                     _ => unreachable!(),
                 }));
-            },
+            }
             Instruction::ListLift {
                 element: _,
                 ty,
@@ -811,10 +811,10 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     require_matches!(ty, crate::types::ValueType::List(x), x),
                     operands.drain(..),
                 )?));
-            },
+            }
             Instruction::ReadI32 { value } => {
                 value.set(require_matches!(operands.pop(), Some(Value::S32(x)), x))
-            },
+            }
             Instruction::RecordLower { record: _, ty } => {
                 let official_ty =
                     require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
@@ -833,7 +833,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 {
                     results[index] = value;
                 }
-            },
+            }
             Instruction::RecordLift { record: _, ty } => {
                 let official_ty =
                     require_matches!(&self.types[ty.index()], ValueType::Record(x), x);
@@ -849,7 +849,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     }),
                 )));
                 operands.clear();
-            },
+            }
             Instruction::HandleLower { handle, ty } => match &self.types[ty.index()] {
                 ValueType::Own(_ty) => {
                     let def = match handle {
@@ -872,7 +872,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                             },
                         ),
                     ));
-                },
+                }
                 ValueType::Borrow(_ty) => {
                     let def = match handle {
                         Handle::Own(x) => x,
@@ -897,7 +897,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         results.push(Value::S32(idx));
                         self.handles_to_drop.push((res, idx));
                     }
-                },
+                }
                 _ => unreachable!(),
             },
             Instruction::HandleLift { handle, ty } => match &self.types[ty.index()] {
@@ -930,7 +930,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         self.store_id,
                         table.destructor().cloned(),
                     )));
-                },
+                }
                 ValueType::Borrow(ty) => {
                     let def = match handle {
                         Handle::Own(x) => x,
@@ -955,25 +955,25 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     self.required_dropped
                         .push((elem.own, res, val, borrow.dead_ref()));
                     results.push(Value::Borrow(borrow));
-                },
+                }
                 _ => unreachable!(),
             },
             Instruction::TupleLower { tuple: _, ty: _ } => {
                 let tuple = require_matches!(operands.pop(), Some(Value::Tuple(x)), x);
                 results.extend(tuple.iter().cloned());
-            },
+            }
             Instruction::TupleLift { tuple: _, ty } => {
                 results.push(Value::Tuple(crate::values::Tuple::new_unchecked(
                     require_matches!(&self.types[ty.index()], ValueType::Tuple(x), x.clone()),
                     operands.drain(..),
                 )));
-            },
+            }
             Instruction::FlagsLower { flags: _, ty: _ } => {
                 let flags = require_matches!(operands.pop(), Some(Value::Flags(x)), x);
                 if flags.ty().names().len() > 0 {
                     results.extend(flags.as_u32_list().iter().map(|x| Value::S32(*x as i32)));
                 }
-            },
+            }
             Instruction::FlagsLift { flags: _, ty } => {
                 let flags = require_matches!(&self.types[ty.index()], ValueType::Flags(x), x);
 
@@ -996,7 +996,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     flags.clone(),
                     list,
                 )));
-            },
+            }
             Instruction::ExtractVariantDiscriminant { discriminant_value } => {
                 let (discriminant, val) = match operands
                     .pop()
@@ -1006,7 +1006,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     Value::Enum(x) => (x.discriminant(), None),
                     Value::Option(x) => {
                         (x.is_some().then_some(1).unwrap_or_default(), (*x).clone())
-                    },
+                    }
                     Value::Result(x) => (
                         x.is_err().then_some(1).unwrap_or_default(),
                         match &*x {
@@ -1024,7 +1024,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 } else {
                     discriminant_value.set((discriminant as i32, false));
                 }
-            },
+            }
             Instruction::VariantLift {
                 ty, discriminant, ..
             } => {
@@ -1035,11 +1035,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     *discriminant as usize,
                     operands.pop(),
                 )?));
-            },
+            }
             Instruction::EnumLower { enum_: _, ty: _ } => {
                 let en = require_matches!(operands.pop(), Some(Value::Enum(x)), x);
                 results.push(Value::S32(en.discriminant() as i32));
-            },
+            }
             Instruction::EnumLift {
                 enum_: _,
                 ty,
@@ -1050,7 +1050,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     enum_ty.clone(),
                     *discriminant as usize,
                 )?));
-            },
+            }
             Instruction::OptionLift {
                 ty, discriminant, ..
             } => {
@@ -1063,7 +1063,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         Some(require_matches!(operands.pop(), Some(x), x))
                     },
                 )?));
-            },
+            }
             Instruction::ResultLift {
                 discriminant, ty, ..
             } => {
@@ -1076,7 +1076,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         std::result::Result::Err(operands.pop())
                     },
                 )?));
-            },
+            }
             Instruction::CallWasm { name: _, sig } => {
                 let args = operands
                     .iter()
@@ -1094,7 +1094,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         .map(TryFrom::try_from)
                         .collect::<Result<Vec<_>>>()?,
                 );
-            },
+            }
             Instruction::CallInterface { func } => {
                 for _i in 0..func.results.len() {
                     results.push(Value::Bool(false));
@@ -1103,7 +1103,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                 self.callee_interface
                     .expect("No available interface callee.")
                     .call(self.ctx.as_context_mut(), operands, &mut results[..])?;
-            },
+            }
             Instruction::Return { amt: _, func: _ } => {
                 if let Some(post) = &self.post_return {
                     post.call(
@@ -1144,7 +1144,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                         .get_mut(i)
                         .ok_or_else(|| Error::msg("Unexpected number of output arguments."))? = val;
                 }
-            },
+            }
             Instruction::Malloc {
                 realloc: _,
                 size,
@@ -1164,7 +1164,7 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     wasm_runtime_layer::Value::I32(x),
                     results.push(Value::S32(*x))
                 );
-            },
+            }
         }
 
         Ok(())
