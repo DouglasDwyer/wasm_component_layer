@@ -1202,7 +1202,7 @@ impl Instance {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
-        println!("{:?}", component.0.instance_modules);
+        // println!("{:?}", component.0.instance_modules);
         for _i in 0..component.0.instance_modules.len() + 10
         /* ??? */
         {
@@ -1215,7 +1215,7 @@ impl Instance {
                 true,
             ));
         }
-        println!("{:?}", instance_flags);
+        // println!("{:?}", instance_flags);
 
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(id, component, linker)?;
