@@ -6,8 +6,10 @@ use std::usize;
 
 use bytemuck::*;
 use wasm_runtime_layer::*;
+#[allow(unused_imports)]
 use wasmtime_environ::component::StringEncoding;
 
+#[allow(unused_imports)]
 use crate::abi::{Generator, *};
 use crate::types::{FuncType, ValueType};
 use crate::values::Value;

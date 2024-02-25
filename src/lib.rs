@@ -614,7 +614,7 @@ impl Component {
         wasmtime_environ::PrimaryMap<StaticModuleIndex, wasmtime_environ::ModuleTranslation<'a>>,
         wasmtime_environ::component::ComponentTypes,
     )> {
-        let tunables = wasmtime_environ::Tunables::default();
+        let tunables = wasmtime_environ::Tunables::default_u32();
         let mut types = ComponentTypesBuilder::default();
         let mut validator = Self::create_component_validator();
 
@@ -622,7 +622,11 @@ impl Component {
             .translate(bytes)
             .context("Could not translate input component to core WASM.")?;
 
-        Ok((translation, modules, types.finish()))
+        Ok((
+            translation,
+            modules,
+            types.finish(&Default::default(), [], []).0,
+        ))
     }
 
     /// Fills in all of the exports for a component.
@@ -684,12 +688,12 @@ impl Component {
                         "Duplicate function definition."
                     );
                 }
-                wasmtime_environ::component::Export::Instance(iface) => {
+                wasmtime_environ::component::Export::Instance { exports, .. } => {
                     let id = match item {
                         WorldItem::Interface(id) => *id,
                         WorldItem::Function(_) | WorldItem::Type(_) => unreachable!(),
                     };
-                    for (func_name, export) in iface {
+                    for (func_name, export) in exports {
                         let (func, options, ty) = match export {
                             wasmtime_environ::component::Export::LiftedFunction {
                                 func,
@@ -751,7 +755,7 @@ impl Component {
                 wasmtime_environ::component::Export::ModuleStatic(_) => {
                     bail!("Not yet implemented.")
                 }
-                wasmtime_environ::component::Export::ModuleImport(_) => {
+                wasmtime_environ::component::Export::ModuleImport { .. } => {
                     bail!("Not yet implemented.")
                 }
             }
@@ -856,28 +860,7 @@ impl Component {
     /// Creates a validator with the appropriate settings for component model resolution.
     fn create_component_validator() -> wasmtime_environ::wasmparser::Validator {
         wasmtime_environ::wasmparser::Validator::new_with_features(
-            wasmtime_environ::wasmparser::WasmFeatures {
-                relaxed_simd: true,
-                threads: true,
-                multi_memory: true,
-                exceptions: true,
-                memory64: true,
-                extended_const: true,
-                component_model: true,
-                function_references: true,
-                memory_control: true,
-                gc: true,
-                component_model_values: true,
-                mutable_global: true,
-                saturating_float_to_int: true,
-                sign_extension: true,
-                bulk_memory: true,
-                multi_value: true,
-                reference_types: true,
-                tail_call: true,
-                simd: true,
-                floats: true,
-            },
+            wasmtime_environ::wasmparser::WasmFeatures::all(),
         )
     }
 }
