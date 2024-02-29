@@ -618,6 +618,7 @@ impl Component {
                     }
                 }
                 Trampoline::AlwaysTrap => {
+                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::AlwaysTrap);
                 }
                 Trampoline::ResourceNew(x) => {
@@ -630,15 +631,19 @@ impl Component {
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceDrop(*x, None));
                 }
                 Trampoline::ResourceTransferOwn => {
+                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferOwn);
                 }
                 Trampoline::ResourceTransferBorrow => {
+                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferBorrow);
                 }
                 Trampoline::ResourceEnterCall => {
+                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceEnterCall);
                 }
                 Trampoline::ResourceExitCall => {
+                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceExitCall);
                 }
             }
@@ -1224,6 +1229,7 @@ impl Instance {
             HandleTable::default();
             component.0.translation.component.num_resource_tables
         ]);
+        let resource_call_borrows = Mutex::new(Vec::new());
 
         let instance = InstanceInner {
             component: component.clone(),
@@ -1234,6 +1240,7 @@ impl Instance {
             state_table: Arc::new(StateTable {
                 dropped: AtomicBool::new(false),
                 resource_tables,
+                resource_call_borrows,
             }),
             types,
             store_id: ctx.as_context().inner.data().id,
@@ -1791,34 +1798,111 @@ impl Instance {
                     }
                     GeneratedTrampoline::ResourceTransferBorrow => {
                         let ty = ty.with_name("resource-transfer-borrow");
+                        let tables = inner.state_table.clone();
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
-                                println!("resource-transfer-borrow({args:?}, {results:?})");
-                                bail!("resource-transfer-borrow is not implemented")
+                                let (handle, from_rid, to_rid) = match args {
+                                    [
+                                        wasm_runtime_layer::Value::I32(handle),
+                                        wasm_runtime_layer::Value::I32(from_rid),
+                                        wasm_runtime_layer::Value::I32(to_rid),
+                                    ] => (handle, from_rid, to_rid),
+                                    args => bail!(
+                                        "resource-transfer-borrow(handle: i32, from-rid: i32, to-rid: i32)\
+                                         called with unexpected args {:?}", args
+                                    ),
+                                };
+                                let from_rid = usize::try_from(*from_rid)?;
+                                let to_rid = usize::try_from(*to_rid)?;
+                                let result = match results {
+                                    [wasm_runtime_layer::Value::I32(result)] => result,
+                                    results => bail!(
+                                        "resource-transfer-borrow(handle: i32, from-rid: i32, to-rid: i32)\
+                                         call expects unexpected results {:?}", results
+                                    ),
+                                };
+                                let mut table_array = tables
+                                    .resource_tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                let from_table = &mut table_array[from_rid];
+                                let handle_borrow = from_table.get(*handle)?;
+                                let handle_rep = handle_borrow.rep;
+                                // FIXME: wrong condition, should be if from_rid is imported
+                                if true {
+                                    ensure!(
+                                        handle_borrow.lend_count == 0,
+                                        "Attempted to borrow-transfer a non-owned loaned resource."
+                                    );
+                                    from_table.remove(*handle)?;
+                                }
+                                let to_table = &mut table_array[to_rid];
+                                // FIXME: wrong condition, should be if to_rid is local
+                                let to_handle = if true {
+                                    handle_rep
+                                } else {
+                                    let to_handle = to_table.add(HandleElement {
+                                        rep: handle_rep,
+                                        own: false,
+                                        lend_count: 0,
+                                    });
+                                    tables
+                                        .resource_call_borrows
+                                        .try_lock()
+                                        .expect("Could not get mutual reference to resource call borrows.")
+                                        .push((to_rid, to_handle));
+                                    to_handle
+                                };
+                                *result = to_handle;
+                                Ok(())
                             },
                         )))
                     }
                     GeneratedTrampoline::ResourceEnterCall => {
                         let ty = ty.with_name("resource-enter-call");
+                        let tables = inner.state_table.clone();
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
-                                println!("resource-enter-call({args:?}, {results:?})");
-                                bail!("resource-enter-call is not implemented")
+                                ensure!(args.is_empty(), "resource-enter-call() called with unexpected args {:?}", args);
+                                ensure!(results.is_empty(), "resource-enter-call() call expects unexpected results {:?}", results);
+                                // As in Jco, ResourceEnterCall is a no-op since all logic
+                                //  is handled in ResourceEnterCall and resource_call_borrows
+                                //  should be empty here
+                                let resource_call_borrows = tables
+                                    .resource_call_borrows
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to resource call borrows.");
+                                assert!(resource_call_borrows.is_empty());
+                                Ok(())
                             },
                         )))
                     }
                     GeneratedTrampoline::ResourceExitCall => {
                         let ty = ty.with_name("resource-exit-call");
+                        let tables = inner.state_table.clone();
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
-                                println!("resource-exit-call({args:?}, {results:?})");
-                                bail!("resource-exit-call is not implemented")
+                                ensure!(args.is_empty(), "resource-exit-call() called with unexpected args {:?}", args);
+                                ensure!(results.is_empty(), "resource-exit-call() call expects unexpected results {:?}", results);
+                                let table_array = tables
+                                    .resource_tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                let mut resource_call_borrows = tables
+                                    .resource_call_borrows
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to resource call borrows.");
+                                for (rid, handle) in resource_call_borrows.iter().copied() {
+                                    ensure!(!table_array[rid].contains(handle), "Borrow was not dropped for resource transfer call.");
+                                }
+                                resource_call_borrows.clear();
+                                Ok(())
                             },
                         )))
                     }
@@ -2113,6 +2197,8 @@ struct StateTable {
     pub dropped: AtomicBool,
     /// The set of resource tables and destructors.
     pub resource_tables: Mutex<Vec<HandleTable>>,
+    /// The set of resource kind and handle ids that have been borrowed for a resource call.
+    pub resource_call_borrows: Mutex<Vec<(usize, i32)>>,
 }
 
 /// Details an import for a component.
@@ -2458,5 +2544,10 @@ impl HandleTable {
     /// or fails if there was no handle present.
     pub fn remove(&mut self, i: i32) -> Result<HandleElement> {
         Ok(self.array.remove(i as usize))
+    }
+
+    /// Check if a handle is present at the provided index.
+    pub fn contains(&self, i: i32) -> bool {
+        self.array.contains(i as usize)
     }
 }
