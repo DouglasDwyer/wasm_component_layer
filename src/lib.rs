@@ -1695,7 +1695,9 @@ impl Instance {
                             .expect("Could not get runtime memory export.")
                             .into_memory()
                             .expect("Export was not of memory type.");
-                        let ty = ty.with_name(format!("transcode-copy-utf8-{}-{}", from.as_u32(), to.as_u32()));
+                        let from = from.as_u32();
+                        let to = to.as_u32();
+                        let ty = ty.with_name(format!("transcode-copy-utf8-{}-{}", from, to));
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
@@ -1707,8 +1709,8 @@ impl Instance {
                                         wasm_runtime_layer::Value::I32(len),
                                     ] => (from_ptr, to_ptr, len),
                                     args => bail!(
-                                        "transcode-copy-utf8(from_ptr: i32, to_ptr: i32, len: i32)\
-                                         called with unexpected args {args:?}"
+                                        "transcode-copy-utf8-{}-{}(from-ptr: i32, to-ptr: i32, len: i32)\
+                                         called with unexpected args {:?}", from, to, args
                                     ),
                                 };
                                 let from_ptr = usize::try_from(*from_ptr)?;
@@ -1716,8 +1718,8 @@ impl Instance {
                                 let len = usize::try_from(*len)?;
                                 ensure!(
                                     results.is_empty(),
-                                    "transcode-copy-utf8(from_ptr: i32, to_ptr: i32, len: i32) \
-                                    call expects unexpected results {results:?}"
+                                    "transcode-copy-utf8-{}-{}(from-ptr: i32, to-ptr: i32, len: i32) \
+                                    call expects unexpected results {:?}", from, to, results
                                 );
                                 let mut buffer = vec![0_u8; len];
                                 from_memory.read(&mut ctx, from_ptr, &mut buffer)?;
@@ -1732,20 +1734,58 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args: &[wasm_runtime_layer::Value], results| {
-                                ensure!(args.is_empty(), "always-trap() called with unexpected args {args:?}");
-                                ensure!(results.is_empty(), "always-trap() call expects unexpected results {results:?}");
+                                ensure!(args.is_empty(), "always-trap() called with unexpected args {:?}", args);
+                                ensure!(results.is_empty(), "always-trap() call expects unexpected results {:?}", results);
                                 Err(wasmtime_environ::Trap::AlwaysTrapAdapter.into())
                             },
                         )))
                     }
                     GeneratedTrampoline::ResourceTransferOwn => {
                         let ty = ty.with_name("resource-transfer-own");
+                        let tables = inner.state_table.clone();
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
-                                println!("resource-transfer-own({args:?}, {results:?})");
-                                bail!("resource-transfer-own is not implemented")
+                                let (handle, from_rid, to_rid) = match args {
+                                    [
+                                        wasm_runtime_layer::Value::I32(handle),
+                                        wasm_runtime_layer::Value::I32(from_rid),
+                                        wasm_runtime_layer::Value::I32(to_rid),
+                                    ] => (handle, from_rid, to_rid),
+                                    args => bail!(
+                                        "resource-transfer-own(handle: i32, from-rid: i32, to-rid: i32)\
+                                         called with unexpected args {:?}", args
+                                    ),
+                                };
+                                let from_rid = usize::try_from(*from_rid)?;
+                                let to_rid = usize::try_from(*to_rid)?;
+                                let result = match results {
+                                    [wasm_runtime_layer::Value::I32(result)] => result,
+                                    results => bail!(
+                                        "resource-transfer-own(handle: i32, from-rid: i32, to-rid: i32)\
+                                         call expects unexpected results {:?}", results
+                                    ),
+                                };
+                                let mut table_array = tables
+                                    .resource_tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                let from_table = &mut table_array[from_rid];
+                                let handle_borrow = from_table.get(*handle)?;
+                                ensure!(handle_borrow.own, "Attempted to owning-transfer a non-owned resource");
+                                ensure!(
+                                    handle_borrow.lend_count == 0,
+                                    "Attempted to owning-transfer a loaned resource."
+                                );
+                                let from_handle = from_table.remove(*handle)?;
+                                let to_handle = table_array[to_rid].add(HandleElement {
+                                    rep: from_handle.rep,
+                                    own: true,
+                                    lend_count: 0,
+                                });
+                                *result = to_handle;
+                                Ok(())
                             },
                         )))
                     }
