@@ -1687,15 +1687,47 @@ impl Instance {
                         )))
                     }
                     GeneratedTrampoline::Utf8CopyTranscoder { from, to } => {
-                        let from = from.as_u32();
-                        let to = to.as_u32();
-                        let ty = ty.with_name(format!("transcode-copy-utf8-{}-{}", from, to));
+                        let from_memory = Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&from])
+                            .expect("Could not get runtime memory export.")
+                            .into_memory()
+                            .expect("Export was not of memory type.");
+                        let to_memory = Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&to])
+                            .expect("Could not get runtime memory export.")
+                            .into_memory()
+                            .expect("Export was not of memory type.");
+                        let ty = ty.with_name(format!("transcode-copy-utf8-{}-{}", from.as_u32(), to.as_u32()));
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
-                            move |_ctx, args, results| {
-                                println!("transcode-copy-utf8-{from}-{to}({args:?}, {results:?})");
-                                bail!("transcode-copy-utf8 is not implemented")
+                            move |mut ctx, args, results| {
+                                let (from_ptr, to_ptr, len) = match args {
+                                    [
+                                        wasm_runtime_layer::Value::I32(from_ptr),
+                                        wasm_runtime_layer::Value::I32(to_ptr),
+                                        wasm_runtime_layer::Value::I32(len),
+                                    ] => (from_ptr, to_ptr, len),
+                                    args => bail!(
+                                        "transcode-copy-utf8(from_ptr: i32, to_ptr: i32, len: i32)\
+                                         received unexpected args {args:?}"
+                                    ),
+                                };
+
+                                let from_ptr = usize::try_from(*from_ptr)?;
+                                let to_ptr = usize::try_from(*to_ptr)?;
+                                let len = usize::try_from(*len)?;
+                                
+                                if !results.is_empty() {
+                                    bail!(
+                                        "transcode-copy-utf8(from_ptr: i32, to_ptr: i32, len: i32)\
+                                         expected unexpected results {results:?}"
+                                    );
+                                }
+
+                                let mut buffer = vec![0_u8; len];
+                                from_memory.read(&mut ctx, from_ptr, &mut buffer)?;
+                                to_memory.write(ctx, to_ptr, &buffer)?;
+
+                                Ok(())
                             },
                         )))
                     }
