@@ -1708,25 +1708,20 @@ impl Instance {
                                     ] => (from_ptr, to_ptr, len),
                                     args => bail!(
                                         "transcode-copy-utf8(from_ptr: i32, to_ptr: i32, len: i32)\
-                                         received unexpected args {args:?}"
+                                         called with unexpected args {args:?}"
                                     ),
                                 };
-
                                 let from_ptr = usize::try_from(*from_ptr)?;
                                 let to_ptr = usize::try_from(*to_ptr)?;
                                 let len = usize::try_from(*len)?;
-                                
-                                if !results.is_empty() {
-                                    bail!(
-                                        "transcode-copy-utf8(from_ptr: i32, to_ptr: i32, len: i32)\
-                                         expected unexpected results {results:?}"
-                                    );
-                                }
-
+                                ensure!(
+                                    results.is_empty(),
+                                    "transcode-copy-utf8(from_ptr: i32, to_ptr: i32, len: i32) \
+                                    call expects unexpected results {results:?}"
+                                );
                                 let mut buffer = vec![0_u8; len];
                                 from_memory.read(&mut ctx, from_ptr, &mut buffer)?;
                                 to_memory.write(ctx, to_ptr, &buffer)?;
-
                                 Ok(())
                             },
                         )))
@@ -1736,8 +1731,9 @@ impl Instance {
                         Ok(Extern::Func(wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
-                            move |_ctx, args, results| {
-                                println!("always-trap({args:?}, {results:?})");
+                            move |_ctx, args: &[wasm_runtime_layer::Value], results| {
+                                ensure!(args.is_empty(), "always-trap() called with unexpected args {args:?}");
+                                ensure!(results.is_empty(), "always-trap() call expects unexpected results {results:?}");
                                 Err(wasmtime_environ::Trap::AlwaysTrapAdapter.into())
                             },
                         )))
