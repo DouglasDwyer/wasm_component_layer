@@ -1208,7 +1208,7 @@ impl Instance {
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
         // println!("{:?}", component.0.instance_modules);
-        for _i in 0..component.0.instance_modules.len() + 10
+        for _i in 0..component.0.instance_modules.len() + 20
         /* ??? */
         {
             instance_flags.push(Global::new(
