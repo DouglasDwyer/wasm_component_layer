@@ -590,6 +590,35 @@ impl Component {
                     lowers.push((idx, options, *lower_ty)) == *index,
                     "Indices did not match."
                 ),
+                Trampoline::Transcoder {
+                    op,
+                    from,
+                    from64,
+                    to,
+                    to64,
+                } => {
+                    if *from64 || *to64 {
+                        bail!("Trampoline::Transcoder is not implemented for memory64");
+                    }
+                    match op {
+                        Transcode::Copy(FixedEncoding::Utf8) => {
+                            output_trampolines.insert(
+                                idx,
+                                GeneratedTrampoline::Utf8CopyTranscoder {
+                                    from: *from,
+                                    to: *to,
+                                },
+                            );
+                        }
+                        transcode => {
+                            bail!("Trampoline::Transcoder is not implemented for {transcode:?}")
+                        }
+                    }
+                }
+                Trampoline::AlwaysTrap => {
+                    // FIXME: this trampoline should be de-duplicated
+                    output_trampolines.insert(idx, GeneratedTrampoline::AlwaysTrap);
+                }
                 Trampoline::ResourceNew(x) => {
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceNew(*x));
                 }
@@ -599,7 +628,22 @@ impl Component {
                 Trampoline::ResourceDrop(x) => {
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceDrop(*x, None));
                 }
-                _ => bail!("Trampoline not implemented."),
+                Trampoline::ResourceTransferOwn => {
+                    // FIXME: this trampoline should be de-duplicated
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferOwn);
+                }
+                Trampoline::ResourceTransferBorrow => {
+                    // FIXME: this trampoline should be de-duplicated
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferBorrow);
+                }
+                Trampoline::ResourceEnterCall => {
+                    // FIXME: this trampoline should be de-duplicated
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceEnterCall);
+                }
+                Trampoline::ResourceExitCall => {
+                    // FIXME: this trampoline should be de-duplicated
+                    output_trampolines.insert(idx, GeneratedTrampoline::ResourceExitCall);
+                }
             }
         }
         Ok(lowers)
@@ -687,7 +731,7 @@ impl Component {
                             .is_none(),
                         "Duplicate function definition."
                     );
-                }
+                },
                 wasmtime_environ::component::Export::Instance { exports, .. } => {
                     let id = match item {
                         WorldItem::Interface(id) => *id,
@@ -754,10 +798,10 @@ impl Component {
                 // This can't be tested at this time so leave it unimplemented
                 wasmtime_environ::component::Export::ModuleStatic(_) => {
                     bail!("Not yet implemented.")
-                }
+                },
                 wasmtime_environ::component::Export::ModuleImport { .. } => {
                     bail!("Not yet implemented.")
-                }
+                },
             }
         }
 
@@ -1161,7 +1205,10 @@ impl Instance {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
-        for _i in 0..component.0.instance_modules.len() {
+        // println!("{:?}", component.0.instance_modules);
+        for _i in 0..component.0.instance_modules.len() + 20
+        /* ??? */
+        {
             instance_flags.push(Global::new(
                 ctx.as_context_mut().inner,
                 wasm_runtime_layer::Value::I32(
@@ -1171,6 +1218,7 @@ impl Instance {
                 true,
             ));
         }
+        // println!("{:?}", instance_flags);
 
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(id, component, linker)?;
@@ -1179,6 +1227,7 @@ impl Instance {
             HandleTable::default();
             component.0.translation.component.num_resource_tables
         ]);
+        let resource_call_borrows = Mutex::new(Vec::new());
 
         let instance = InstanceInner {
             component: component.clone(),
@@ -1189,6 +1238,7 @@ impl Instance {
             state_table: Arc::new(StateTable {
                 dropped: AtomicBool::new(false),
                 resource_tables,
+                resource_call_borrows,
             }),
             types,
             store_id: ctx.as_context().inner.data().id,
@@ -1641,6 +1691,219 @@ impl Instance {
                             },
                         )))
                     }
+                    GeneratedTrampoline::Utf8CopyTranscoder { from, to } => {
+                        let from_memory = Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&from])
+                            .expect("Could not get runtime memory export.")
+                            .into_memory()
+                            .expect("Export was not of memory type.");
+                        let to_memory = Self::core_export(inner, &ctx, &inner.component.0.extracted_memories[&to])
+                            .expect("Could not get runtime memory export.")
+                            .into_memory()
+                            .expect("Export was not of memory type.");
+                        let from = from.as_u32();
+                        let to = to.as_u32();
+                        let ty = ty.with_name(format!("transcode-copy-utf8-{}-{}", from, to));
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |mut ctx, args, results| {
+                                let (from_ptr, to_ptr, len) = match args {
+                                    [
+                                        wasm_runtime_layer::Value::I32(from_ptr),
+                                        wasm_runtime_layer::Value::I32(to_ptr),
+                                        wasm_runtime_layer::Value::I32(len),
+                                    ] => (from_ptr, to_ptr, len),
+                                    args => bail!(
+                                        "transcode-copy-utf8-{}-{}(from-ptr: i32, to-ptr: i32, len: i32)\
+                                         called with unexpected args {:?}", from, to, args
+                                    ),
+                                };
+                                let from_ptr = usize::try_from(*from_ptr)?;
+                                let to_ptr = usize::try_from(*to_ptr)?;
+                                let len = usize::try_from(*len)?;
+                                ensure!(
+                                    results.is_empty(),
+                                    "transcode-copy-utf8-{}-{}(from-ptr: i32, to-ptr: i32, len: i32) \
+                                    call expects unexpected results {:?}", from, to, results
+                                );
+                                let mut buffer = vec![0_u8; len];
+                                from_memory.read(&mut ctx, from_ptr, &mut buffer)?;
+                                to_memory.write(ctx, to_ptr, &buffer)?;
+                                Ok(())
+                            },
+                        )))
+                    }
+                    GeneratedTrampoline::AlwaysTrap => {
+                        let ty = ty.with_name("always-trap");
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args: &[wasm_runtime_layer::Value], results| {
+                                ensure!(args.is_empty(), "always-trap() called with unexpected args {:?}", args);
+                                ensure!(results.is_empty(), "always-trap() call expects unexpected results {:?}", results);
+                                Err(wasmtime_environ::Trap::AlwaysTrapAdapter.into())
+                            },
+                        )))
+                    }
+                    GeneratedTrampoline::ResourceTransferOwn => {
+                        let ty = ty.with_name("resource-transfer-own");
+                        let tables = inner.state_table.clone();
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                let (handle, from_rid, to_rid) = match args {
+                                    [
+                                        wasm_runtime_layer::Value::I32(handle),
+                                        wasm_runtime_layer::Value::I32(from_rid),
+                                        wasm_runtime_layer::Value::I32(to_rid),
+                                    ] => (handle, from_rid, to_rid),
+                                    args => bail!(
+                                        "resource-transfer-own(handle: i32, from-rid: i32, to-rid: i32)\
+                                         called with unexpected args {:?}", args
+                                    ),
+                                };
+                                let from_rid = usize::try_from(*from_rid)?;
+                                let to_rid = usize::try_from(*to_rid)?;
+                                let result = match results {
+                                    [wasm_runtime_layer::Value::I32(result)] => result,
+                                    results => bail!(
+                                        "resource-transfer-own(handle: i32, from-rid: i32, to-rid: i32)\
+                                         call expects unexpected results {:?}", results
+                                    ),
+                                };
+                                let mut table_array = tables
+                                    .resource_tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                let from_table = &mut table_array[from_rid];
+                                let handle_borrow = from_table.get(*handle)?;
+                                ensure!(handle_borrow.own, "Attempted to owning-transfer a non-owned resource");
+                                ensure!(
+                                    handle_borrow.lend_count == 0,
+                                    "Attempted to owning-transfer a loaned resource."
+                                );
+                                let from_handle = from_table.remove(*handle)?;
+                                let to_handle = table_array[to_rid].add(HandleElement {
+                                    rep: from_handle.rep,
+                                    own: true,
+                                    lend_count: 0,
+                                });
+                                *result = to_handle;
+                                Ok(())
+                            },
+                        )))
+                    }
+                    GeneratedTrampoline::ResourceTransferBorrow => {
+                        let ty = ty.with_name("resource-transfer-borrow");
+                        let tables = inner.state_table.clone();
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                let (handle, from_rid, to_rid) = match args {
+                                    [
+                                        wasm_runtime_layer::Value::I32(handle),
+                                        wasm_runtime_layer::Value::I32(from_rid),
+                                        wasm_runtime_layer::Value::I32(to_rid),
+                                    ] => (handle, from_rid, to_rid),
+                                    args => bail!(
+                                        "resource-transfer-borrow(handle: i32, from-rid: i32, to-rid: i32)\
+                                         called with unexpected args {:?}", args
+                                    ),
+                                };
+                                let from_rid = usize::try_from(*from_rid)?;
+                                let to_rid = usize::try_from(*to_rid)?;
+                                let result = match results {
+                                    [wasm_runtime_layer::Value::I32(result)] => result,
+                                    results => bail!(
+                                        "resource-transfer-borrow(handle: i32, from-rid: i32, to-rid: i32)\
+                                         call expects unexpected results {:?}", results
+                                    ),
+                                };
+                                let mut table_array = tables
+                                    .resource_tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                let from_table = &mut table_array[from_rid];
+                                let handle_borrow = from_table.get(*handle)?;
+                                let handle_rep = handle_borrow.rep;
+                                // FIXME: wrong condition, should be if from_rid is imported
+                                if true {
+                                    ensure!(
+                                        handle_borrow.lend_count == 0,
+                                        "Attempted to borrow-transfer a non-owned loaned resource."
+                                    );
+                                    from_table.remove(*handle)?;
+                                }
+                                let to_table = &mut table_array[to_rid];
+                                // FIXME: wrong condition, should be if to_rid is local
+                                let to_handle = if true {
+                                    handle_rep
+                                } else {
+                                    let to_handle = to_table.add(HandleElement {
+                                        rep: handle_rep,
+                                        own: false,
+                                        lend_count: 0,
+                                    });
+                                    tables
+                                        .resource_call_borrows
+                                        .try_lock()
+                                        .expect("Could not get mutual reference to resource call borrows.")
+                                        .push((to_rid, to_handle));
+                                    to_handle
+                                };
+                                *result = to_handle;
+                                Ok(())
+                            },
+                        )))
+                    }
+                    GeneratedTrampoline::ResourceEnterCall => {
+                        let ty = ty.with_name("resource-enter-call");
+                        let tables = inner.state_table.clone();
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                ensure!(args.is_empty(), "resource-enter-call() called with unexpected args {:?}", args);
+                                ensure!(results.is_empty(), "resource-enter-call() call expects unexpected results {:?}", results);
+                                // As in Jco, ResourceEnterCall is a no-op since all logic
+                                //  is handled in ResourceEnterCall and resource_call_borrows
+                                //  should be empty here
+                                let resource_call_borrows = tables
+                                    .resource_call_borrows
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to resource call borrows.");
+                                assert!(resource_call_borrows.is_empty());
+                                Ok(())
+                            },
+                        )))
+                    }
+                    GeneratedTrampoline::ResourceExitCall => {
+                        let ty = ty.with_name("resource-exit-call");
+                        let tables = inner.state_table.clone();
+                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                            ctx.as_context_mut().inner,
+                            ty,
+                            move |_ctx, args, results| {
+                                ensure!(args.is_empty(), "resource-exit-call() called with unexpected args {:?}", args);
+                                ensure!(results.is_empty(), "resource-exit-call() call expects unexpected results {:?}", results);
+                                let table_array = tables
+                                    .resource_tables
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to table.");
+                                let mut resource_call_borrows = tables
+                                    .resource_call_borrows
+                                    .try_lock()
+                                    .expect("Could not get mutual reference to resource call borrows.");
+                                for (rid, handle) in resource_call_borrows.iter().copied() {
+                                    ensure!(!table_array[rid].contains(handle), "Borrow was not dropped for resource transfer call.");
+                                }
+                                resource_call_borrows.clear();
+                                Ok(())
+                            },
+                        )))
+                    }
                 }
             }
             CoreDef::InstanceFlags(i) => Ok(Extern::Global(inner.instance_flags[*i].clone())),
@@ -1932,6 +2195,8 @@ struct StateTable {
     pub dropped: AtomicBool,
     /// The set of resource tables and destructors.
     pub resource_tables: Mutex<Vec<HandleTable>>,
+    /// The set of resource kind and handle ids that have been borrowed for a resource call.
+    pub resource_call_borrows: Mutex<Vec<(usize, i32)>>,
 }
 
 /// Details an import for a component.
@@ -2204,6 +2469,23 @@ enum GeneratedTrampoline {
     ResourceRep(TypeResourceTableIndex),
     /// The guest would like to drop a resource.
     ResourceDrop(TypeResourceTableIndex, Option<CoreDef>),
+    /// A Utf8 string is copied from one component's memory to the other's.
+    Utf8CopyTranscoder {
+        /// Index of the linear memory from which the string is copied.
+        from: RuntimeMemoryIndex,
+        /// Index of the linear memory to which the string is copied.
+        to: RuntimeMemoryIndex,
+    },
+    /// A degenerate lift/lower combination forces a trap.
+    AlwaysTrap,
+    /// An owned resource is transferred from one table to another.
+    ResourceTransferOwn,
+    /// A borrowed resource is transferred from one table to another.
+    ResourceTransferBorrow,
+    /// A call is being entered, requiring bookkeeping for resource handles.
+    ResourceEnterCall,
+    /// A call is being exited, requiring bookkeeping for resource handles.
+    ResourceExitCall,
 }
 
 /// Represents a resource handle owned by a guest instance.
@@ -2260,5 +2542,10 @@ impl HandleTable {
     /// or fails if there was no handle present.
     pub fn remove(&mut self, i: i32) -> Result<HandleElement> {
         Ok(self.array.remove(i as usize))
+    }
+
+    /// Check if a handle is present at the provided index.
+    pub fn contains(&self, i: i32) -> bool {
+        self.array.contains(i as usize)
     }
 }

@@ -350,9 +350,11 @@ impl<'a, C: AsContextMut> FuncBindgen<'a, C> {
         self.memory.as_ref().expect("No memory").read(
             self.ctx.as_context().inner,
             offset,
-            Arc::get_mut(&mut raw_memory).expect("Could not get exclusive reference."),
+            B::to_le_slice_mut(
+                Arc::get_mut(&mut raw_memory).expect("Could not get exclusive reference."),
+            ),
         )?;
-        Ok(B::from_le_array(raw_memory))
+        Ok(raw_memory)
     }
 
     /// Stores a list of types to the given offset in guest memory.
@@ -1317,11 +1319,11 @@ trait Blittable: Sized {
     fn to_bytes(self) -> Self::Array;
 
     /// Creates a new, zeroed byte array for an array of `Self` of the given size.
-    fn zeroed_array(len: usize) -> Arc<[u8]>;
-    /// Converts an array of bytes to an array of `Self`.
-    fn from_le_array(array: Arc<[u8]>) -> Arc<[Self]>;
+    fn zeroed_array(len: usize) -> Arc<[Self]>;
     /// Converts a slice of `Self` to a slice of bytes.
     fn to_le_slice(data: &[Self]) -> &[u8];
+    /// Converts a mutable slice of `Self` to a mutable slice of bytes.
+    fn to_le_slice_mut(data: &mut [Self]) -> &mut [u8];
 }
 
 /// Implements the `Blittable` interface for primitive types.
@@ -1339,18 +1341,18 @@ macro_rules! impl_blittable {
                     Self::to_le_bytes(self)
                 }
 
-                fn zeroed_array(len: usize) -> Arc<[u8]> {
-                    Arc::from(cast_slice_box(zeroed_slice_box::<Self>(len)))
-                }
-
-                fn from_le_array(array: Arc<[u8]>) -> Arc<[Self]> {
-                    assert!(cfg!(target_endian = "little"), "Attempted to bitcast to little-endian bytes on a big endian platform.");
-                    cast_slice_arc(array)
+                fn zeroed_array(len: usize) -> Arc<[Self]> {
+                    Arc::from(zeroed_slice_box::<Self>(len))
                 }
 
                 fn to_le_slice(data: &[Self]) -> &[u8] {
                     assert!(cfg!(target_endian = "little"), "Attempted to bitcast to little-endian bytes on a big endian platform.");
                     cast_slice(data)
+                }
+
+                fn to_le_slice_mut(data: &mut [Self]) -> &mut [u8] {
+                    assert!(cfg!(target_endian = "little"), "Attempted to bitcast to little-endian bytes on a big endian platform.");
+                    cast_slice_mut(data)
                 }
             }
         )*
