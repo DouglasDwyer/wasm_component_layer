@@ -1207,7 +1207,6 @@ impl Instance {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let mut instance_flags = wasmtime_environ::PrimaryMap::default();
-        // println!("{:?}", component.0.instance_modules);
         for _i in 0..component.0.instance_modules.len() + 20
         /* ??? */
         {
@@ -1220,7 +1219,6 @@ impl Instance {
                 true,
             ));
         }
-        // println!("{:?}", instance_flags);
 
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(id, component, linker)?;
@@ -1620,12 +1618,13 @@ impl Instance {
                                 let mut table_array = tables
                                     .resource_tables
                                     .try_lock()
-                                    .expect("Could not get mutual reference to table.");
+                                    .expect("Could not get mutable reference to table.");
                                 results[0] = wasm_runtime_layer::Value::I32(
                                     table_array[x as usize].add(HandleElement {
                                         rep,
                                         own: true,
                                         lend_count: 0,
+                                        resource: x as usize,
                                     }),
                                 );
                                 Ok(())
@@ -1645,7 +1644,7 @@ impl Instance {
                                 let table_array = tables
                                     .resource_tables
                                     .try_lock()
-                                    .expect("Could not get mutual reference to table.");
+                                    .expect("Could not get mutable reference to table.");
                                 results[0] = wasm_runtime_layer::Value::I32(
                                     table_array[x as usize].get(idx)?.rep,
                                 );
@@ -1667,7 +1666,7 @@ impl Instance {
                                 let mut table_array = tables
                                     .resource_tables
                                     .try_lock()
-                                    .expect("Could not get mutual reference to table.");
+                                    .expect("Could not get mutable reference to table.");
                                 let current_table = &mut table_array[x as usize];
 
                                 let elem_borrow = current_table.get(idx)?;
@@ -1768,7 +1767,7 @@ impl Instance {
                                 let from_rid = usize::try_from(*from_rid)?;
                                 let to_rid = usize::try_from(*to_rid)?;
                                 let result = match results {
-                                    [wasm_runtime_layer::Value::I32(result)] => result,
+                                    [result] => result,
                                     results => bail!(
                                         "resource-transfer-own(handle: i32, from-rid: i32, to-rid: i32)\
                                          call expects unexpected results {:?}", results
@@ -1777,7 +1776,7 @@ impl Instance {
                                 let mut table_array = tables
                                     .resource_tables
                                     .try_lock()
-                                    .expect("Could not get mutual reference to table.");
+                                    .expect("Could not get mutable reference to table.");
                                 let from_table = &mut table_array[from_rid];
                                 let handle_borrow = from_table.get(*handle)?;
                                 ensure!(handle_borrow.own, "Attempted to owning-transfer a non-owned resource");
@@ -1790,8 +1789,9 @@ impl Instance {
                                     rep: from_handle.rep,
                                     own: true,
                                     lend_count: 0,
+                                    resource: from_handle.resource,
                                 });
-                                *result = to_handle;
+                                *result = wasm_runtime_layer::Value::I32(to_handle);
                                 Ok(())
                             },
                         )))
@@ -1817,7 +1817,7 @@ impl Instance {
                                 let from_rid = usize::try_from(*from_rid)?;
                                 let to_rid = usize::try_from(*to_rid)?;
                                 let result = match results {
-                                    [wasm_runtime_layer::Value::I32(result)] => result,
+                                    [result] => result,
                                     results => bail!(
                                         "resource-transfer-borrow(handle: i32, from-rid: i32, to-rid: i32)\
                                          call expects unexpected results {:?}", results
@@ -1826,36 +1826,37 @@ impl Instance {
                                 let mut table_array = tables
                                     .resource_tables
                                     .try_lock()
-                                    .expect("Could not get mutual reference to table.");
+                                    .expect("Could not get mutable reference to table.");
                                 let from_table = &mut table_array[from_rid];
                                 let handle_borrow = from_table.get(*handle)?;
                                 let handle_rep = handle_borrow.rep;
-                                // FIXME: wrong condition, should be if from_rid is imported
-                                if true {
-                                    ensure!(
-                                        handle_borrow.lend_count == 0,
-                                        "Attempted to borrow-transfer a non-owned loaned resource."
-                                    );
-                                    from_table.remove(*handle)?;
-                                }
+                                let handle_resource = handle_borrow.resource;
+                                // FIXME: is this needed in any case?
+                                // if handle_resource != from_rid {
+                                //     ensure!(
+                                //         handle_borrow.lend_count == 0,
+                                //         "Attempted to borrow-transfer a non-owned loaned resource."
+                                //     );
+                                //     from_table.remove(*handle)?;
+                                // }
                                 let to_table = &mut table_array[to_rid];
-                                // FIXME: wrong condition, should be if to_rid is local
-                                let to_handle = if true {
+                                let to_handle = if handle_resource == to_rid {
                                     handle_rep
                                 } else {
                                     let to_handle = to_table.add(HandleElement {
                                         rep: handle_rep,
                                         own: false,
                                         lend_count: 0,
+                                        resource: handle_resource,
                                     });
                                     tables
                                         .resource_call_borrows
                                         .try_lock()
-                                        .expect("Could not get mutual reference to resource call borrows.")
+                                        .expect("Could not get mutable reference to resource call borrows.")
                                         .push((to_rid, to_handle));
                                     to_handle
                                 };
-                                *result = to_handle;
+                                *result = wasm_runtime_layer::Value::I32(to_handle);
                                 Ok(())
                             },
                         )))
@@ -1875,7 +1876,7 @@ impl Instance {
                                 let resource_call_borrows = tables
                                     .resource_call_borrows
                                     .try_lock()
-                                    .expect("Could not get mutual reference to resource call borrows.");
+                                    .expect("Could not get mutable reference to resource call borrows.");
                                 assert!(resource_call_borrows.is_empty());
                                 Ok(())
                             },
@@ -1893,11 +1894,11 @@ impl Instance {
                                 let table_array = tables
                                     .resource_tables
                                     .try_lock()
-                                    .expect("Could not get mutual reference to table.");
+                                    .expect("Could not get mutable reference to table.");
                                 let mut resource_call_borrows = tables
                                     .resource_call_borrows
                                     .try_lock()
-                                    .expect("Could not get mutual reference to resource call borrows.");
+                                    .expect("Could not get mutable reference to resource call borrows.");
                                 for (rid, handle) in resource_call_borrows.iter().copied() {
                                     ensure!(!table_array[rid].contains(handle), "Borrow was not dropped for resource transfer call.");
                                 }
@@ -2499,6 +2500,8 @@ struct HandleElement {
     pub own: bool,
     /// The number of times that this handle has been lent, without any borrows being returned.
     pub lend_count: i32,
+    /// The resource that created this instance
+    pub resource: usize,
 }
 
 /// Stores a set of resource handles and associated type information.
