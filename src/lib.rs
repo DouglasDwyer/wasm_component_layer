@@ -529,18 +529,11 @@ impl Component {
                         &mut inner.resource_map,
                     );
 
-                    ensure!(
-                        inst.functions.insert(imp.name.clone(), ty).is_none(),
-                        "Attempted to insert duplicate import."
-                    );
+                    inst.functions.insert(imp.name.clone(), ty);
 
-                    ensure!(
-                        inner
-                            .generated_trampolines
-                            .insert(idx, GeneratedTrampoline::ImportedFunction(imp))
-                            .is_none(),
-                        "Attempted to insert duplicate import."
-                    );
+                    inner
+                        .generated_trampolines
+                        .insert(idx, GeneratedTrampoline::ImportedFunction(imp));
                 }
                 GlobalInitializer::Resource(x) => {
                     if let Some(destructor) = x.dtor.clone() {
