@@ -8,11 +8,11 @@
 //!
 //! ## Usage
 //!
-//! To use `wasm_component_layer`, a runtime is required. The [`wasm_runtime_layer`](https://github.com/DouglasDwyer/wasm_runtime_layer) crate provides the common interface used for WebAssembly runtimes, so when using this crate it must also be added to the `Cargo.toml` file with the appropriate runtime selected. For instance, the examples in this repository use the [`wasmi`](https://github.com/paritytech/wasmi) runtime:
+//! To use `wasm_component_layer`, a runtime is required. The [`wasm_runtime_layer`](https://github.com/DouglasDwyer/wasm_runtime_layer) crate provides the common interface used for WebAssembly runtimes, so when using this crate it must also be added to the `Cargo.toml` file with the appropriate runtime selected. For instance, the examples in this repository use the [`wasmi_runtime_layer`](https://crates.io/crates/wasmi_runtime_layer) runtime:
 //!
 //! ```toml
-//! wasm_component_layer = "0.1.0"
-//! wasm_runtime_layer = { version = "0.1.1", features = [ "backend_wasmi" ] }
+//! wasm_component_layer = "0.1.16"
+//! wasmi_runtime_layer = "0.31.0"
 //! ```
 //!
 //! The following is a small overview of `wasm_component_layer`'s API. The complete example may be found in the [examples folder](/examples). Consider a WASM component with the following WIT:
@@ -44,7 +44,7 @@
 //!
 //!     // Create a store for managing WASM data and any custom user-defined state.
 //!     let mut store = Store::new(&engine, ());
-//!     
+//!
 //!     // Parse the component bytes and load its imports and exports.
 //!     let component = Component::new(&engine, WASM).unwrap();
 //!     // Create a linker that will be used to resolve the component's imports, if any.
@@ -59,7 +59,7 @@
 //!
 //!     // Create an example list to test upon.
 //!     let example = ["a", "b", "c"].iter().map(ToString::to_string).collect::<Vec<_>>();
-//!     
+//!
 //!     println!("Calling select-nth({example:?}, 1) == {}", select_nth.call(&mut store, (example.clone(), 1)).unwrap());
 //!     // Prints 'Calling select-nth(["a", "b", "c"], 1) == b'
 //! }
@@ -2069,7 +2069,7 @@ impl<'a, T: 'a, E: backend::WasmEngine> StoreContextMut<'a, T, E> {
 
     /// Access the underlying data owned by this store.
     ///
-    /// Same as [`Store::data`].    
+    /// Same as [`Store::data`].
     pub fn data(&self) -> &T {
         &self.inner.data().data
     }
