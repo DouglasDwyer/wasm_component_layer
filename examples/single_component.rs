@@ -5,7 +5,7 @@ const WASM: &[u8] = include_bytes!("single_component/component.wasm");
 
 pub fn main() {
     // Create a new engine for instantiating a component.
-    let engine = Engine::new(wasmi::Engine::default());
+    let engine = Engine::new(wasmi_runtime_layer::Engine::default());
 
     // Create a store for managing WASM data and any custom user-defined state.
     let mut store = Store::new(&engine, ());

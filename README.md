@@ -9,11 +9,13 @@ It supports loading and linking WASM components, inspecting and generating compo
 
 ## Usage
 
-To use `wasm_component_layer`, a runtime is required. The [`wasm_runtime_layer`](https://github.com/DouglasDwyer/wasm_runtime_layer) crate provides the common interface used for WebAssembly runtimes, so when using this crate it must also be added to the `Cargo.toml` file with the appropriate runtime selected. For instance, the examples in this repository use the [`wasmi`](https://github.com/paritytech/wasmi) runtime:
+To use `wasm_component_layer`, a runtime is required. The [`wasm_runtime_layer`](https://github.com/DouglasDwyer/wasm_runtime_layer) crate provides the common interface used for WebAssembly runtimes, so when using this crate it must also be added to the `Cargo.toml` file with the appropriate runtime selected. For instance, the examples in this repository use the [`wasmi_runtime_layer`](https://crates.io/crates/wasmi_runtime_layer) runtime:
 
 ```toml
-wasm_component_layer = "0.1.0"
-wasm_runtime_layer = { version = "0.1.1", features = [ "backend_wasmi" ] }
+wasm_component_layer = "0.1.16"
+wasmi_runtime_layer = "0.31.0"
+# wasmtime_runtime_layer = "0.31.0"
+# js_wasm_runtime_layer = "0.31.0"
 ```
 
 The following is a small overview of `wasm_component_layer`'s API. The complete example may be found in the [examples folder](/examples). Consider a WASM component with the following WIT:
@@ -41,11 +43,11 @@ const WASM: &[u8] = include_bytes!("single_component/component.wasm");
 
 pub fn main() {
     // Create a new engine for instantiating a component.
-    let engine = Engine::new(wasmi::Engine::default());
+    let engine = Engine::new(wasmi_runtime_layer::Engine::default());
 
     // Create a store for managing WASM data and any custom user-defined state.
     let mut store = Store::new(&engine, ());
-    
+
     // Parse the component bytes and load its imports and exports.
     let component = Component::new(&engine, WASM).unwrap();
     // Create a linker that will be used to resolve the component's imports, if any.
@@ -60,7 +62,7 @@ pub fn main() {
 
     // Create an example list to test upon.
     let example = ["a", "b", "c"].iter().map(ToString::to_string).collect::<Vec<_>>();
-    
+
     println!("Calling select-nth({example:?}, 1) == {}", select_nth.call(&mut store, (example.clone(), 1)).unwrap());
     // Prints 'Calling select-nth(["a", "b", "c"], 1) == b'
 }
@@ -72,7 +74,7 @@ pub fn main() {
 
 - Parsing and instantiating WASM component binaries
 - Runtime generation of component interface types
-- Specialized list types for faster 
+- Specialized list types for faster
 - Structural equality of component interface types, as mandated by the spec
 - Support for guest resources
 - Support for strongly-typed host resources with destructors
