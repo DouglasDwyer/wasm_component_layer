@@ -74,7 +74,7 @@ pub fn main() {
 
 - Parsing and instantiating WASM component binaries
 - Runtime generation of component interface types
-- Specialized list types for faster
+- Specialized list types for faster lifting/lowering
 - Structural equality of component interface types, as mandated by the spec
 - Support for guest resources
 - Support for strongly-typed host resources with destructors
