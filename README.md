@@ -14,8 +14,8 @@ To use `wasm_component_layer`, a runtime is required. The [`wasm_runtime_layer`]
 ```toml
 wasm_component_layer = "0.1.16"
 wasmi_runtime_layer = "0.31.0"
-# wasmtime_runtime_layer = "0.31.0"
-# js_wasm_runtime_layer = "0.31.0"
+# wasmtime_runtime_layer = "21.0.0"
+# js_wasm_runtime_layer = "0.4.0"
 ```
 
 The following is a small overview of `wasm_component_layer`'s API. The complete example may be found in the [examples folder](/examples). Consider a WASM component with the following WIT:
