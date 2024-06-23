@@ -871,7 +871,8 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                                 rep,
                                 own: true,
                                 lend_count: 0,
-                                resource: self.component.resource_map[def.index()].as_u32() as usize,
+                                resource: self.component.resource_map[def.index()].as_u32()
+                                    as usize,
                             },
                         ),
                     ));
