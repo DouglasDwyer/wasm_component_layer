@@ -654,8 +654,8 @@ impl Component {
         wasmtime_environ::component::ComponentTypes,
     )> {
         let tunables = wasmtime_environ::Tunables::default_u32();
-        let mut types = ComponentTypesBuilder::default();
         let mut validator = Self::create_component_validator();
+        let mut types = ComponentTypesBuilder::new(&validator);
 
         let (translation, modules) = Translator::new(&tunables, &mut validator, &mut types, scope)
             .translate(bytes)
@@ -868,7 +868,7 @@ impl Component {
                 let t2 = &types[*t2];
                 for (f1, f2) in t1.cases.iter().zip(t2.cases.iter()) {
                     if let Some(t1) = &f1.ty {
-                        Self::connect_resources(resolve, types, t1, f2.ty.as_ref().unwrap(), map);
+                        Self::connect_resources(resolve, types, t1, f2.1.as_ref().unwrap(), map);
                     }
                 }
             }
