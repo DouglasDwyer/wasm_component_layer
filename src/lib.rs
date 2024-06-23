@@ -168,7 +168,7 @@ impl Component {
             .context("Could not decode component information from bytes.")?;
 
         let (mut resolve, world_id) = match decoded {
-            DecodedWasm::WitPackage(..) => bail!("Cannot instantiate WIT package as module."),
+            DecodedWasm::WitPackages(..) => bail!("Cannot instantiate WIT packages as module."),
             DecodedWasm::Component(resolve, id) => (resolve, id),
         };
 
@@ -308,7 +308,11 @@ impl Component {
                         }
                     }
                 }
-                WorldItem::Interface(x) => {
+                // TODO: handle stable vs unstable interfaces
+                WorldItem::Interface {
+                    id: x,
+                    stability: _,
+                } => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
                             let ty = ResourceType::from_resolve(
@@ -358,7 +362,11 @@ impl Component {
                         }
                     }
                 }
-                WorldItem::Interface(x) => {
+                // TODO: handle stable vs unstable interfaces
+                WorldItem::Interface {
+                    id: x,
+                    stability: _,
+                } => {
                     for (name, ty) in &inner.resolve.interfaces[*x].types {
                         if inner.resolve.types[*ty].kind == TypeDefKind::Resource {
                             let ty = ResourceType::from_resolve(
@@ -495,7 +503,8 @@ impl Component {
                                 options: lowering_opts.clone(),
                             }
                         }
-                        WorldItem::Interface(i) => {
+                        // TODO: handle stable vs unstable interfaces
+                        WorldItem::Interface { id: i, .. } => {
                             assert_eq!(path.len(), 1);
                             let iface = &inner.resolve.interfaces[*i];
                             let func = &iface.functions[&path[0]];
@@ -682,7 +691,7 @@ impl Component {
                 wasmtime_environ::component::Export::LiftedFunction { ty, func, options } => {
                     let f = match item {
                         WorldItem::Function(f) => f,
-                        WorldItem::Interface(_) | WorldItem::Type(_) => unreachable!(),
+                        WorldItem::Interface { .. } | WorldItem::Type(_) => unreachable!(),
                     };
 
                     Self::update_resource_map(
@@ -729,7 +738,8 @@ impl Component {
                 }
                 wasmtime_environ::component::Export::Instance { exports, .. } => {
                     let id = match item {
-                        WorldItem::Interface(id) => *id,
+                        // TODO: handle stable vs unstable interfaces
+                        WorldItem::Interface { id, stability: _ } => *id,
                         WorldItem::Function(_) | WorldItem::Type(_) => unreachable!(),
                     };
                     for (func_name, export) in exports {

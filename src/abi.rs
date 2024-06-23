@@ -11,11 +11,14 @@ fn join(a: WasmType, b: WasmType) -> WasmType {
     use WasmType::*;
 
     match (a, b) {
-        (I32, I32) | (I64, I64) | (F32, F32) | (F64, F64) => a,
+        (I32 | Pointer | Length, I32 | Pointer | Length)
+        | (I64 | PointerOrI64, I64 | PointerOrI64)
+        | (F32, F32)
+        | (F64, F64) => a,
 
-        (I32, F32) | (F32, I32) => I32,
+        (I32 | Pointer | Length, F32) | (F32, I32 | Pointer | Length) => I32,
 
-        (_, I64 | F64) | (I64 | F64, _) => I64,
+        (_, I64 | PointerOrI64 | F64) | (I64 | PointerOrI64 | F64, _) => I64,
     }
 }
 
@@ -782,8 +785,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::S64 => self.emit(&I64FromS64),
             Type::U64 => self.emit(&I64FromU64),
             Type::Char => self.emit(&I32FromChar),
-            Type::Float32 => self.emit(&F32FromFloat32),
-            Type::Float64 => self.emit(&F64FromFloat64),
+            Type::F32 => self.emit(&F32FromFloat32),
+            Type::F64 => self.emit(&F64FromFloat64),
             Type::String => {
                 let realloc = self.list_realloc();
                 self.emit(&StringLower { realloc })
@@ -958,8 +961,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::S64 => self.emit(&S64FromI64),
             Type::U64 => self.emit(&U64FromI64),
             Type::Char => self.emit(&CharFromI32),
-            Type::Float32 => self.emit(&Float32FromF32),
-            Type::Float64 => self.emit(&Float64FromF64),
+            Type::F32 => self.emit(&Float32FromF32),
+            Type::F64 => self.emit(&Float64FromF64),
             Type::String => self.emit(&StringLift),
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Type(t) => self.lift(t),
@@ -1153,8 +1156,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 self.lower_and_emit(ty, addr, &I32Store { offset })
             }
             Type::U64 | Type::S64 => self.lower_and_emit(ty, addr, &I64Store { offset }),
-            Type::Float32 => self.lower_and_emit(ty, addr, &F32Store { offset }),
-            Type::Float64 => self.lower_and_emit(ty, addr, &F64Store { offset }),
+            Type::F32 => self.lower_and_emit(ty, addr, &F32Store { offset }),
+            Type::F64 => self.lower_and_emit(ty, addr, &F64Store { offset }),
             Type::String => self.write_list_to_memory(ty, addr, offset),
 
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -1340,8 +1343,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::S16 => self.emit_and_lift(ty, addr, &I32Load16S { offset }),
             Type::U32 | Type::S32 | Type::Char => self.emit_and_lift(ty, addr, &I32Load { offset }),
             Type::U64 | Type::S64 => self.emit_and_lift(ty, addr, &I64Load { offset }),
-            Type::Float32 => self.emit_and_lift(ty, addr, &F32Load { offset }),
-            Type::Float64 => self.emit_and_lift(ty, addr, &F64Load { offset }),
+            Type::F32 => self.emit_and_lift(ty, addr, &F32Load { offset }),
+            Type::F64 => self.emit_and_lift(ty, addr, &F64Load { offset }),
             Type::String => self.read_list_from_memory(ty, addr, offset),
 
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -1555,20 +1558,25 @@ fn cast(from: WasmType, to: WasmType) -> Bitcast {
     use WasmType::*;
 
     match (from, to) {
-        (I32, I32) | (I64, I64) | (F32, F32) | (F64, F64) => Bitcast::None,
+        (I32 | Pointer | Length, I32 | Pointer | Length)
+        | (I64 | PointerOrI64, I64 | PointerOrI64)
+        | (F32, F32)
+        | (F64, F64) => Bitcast::None,
 
-        (I32, I64) => Bitcast::I32ToI64,
-        (F32, I32) => Bitcast::F32ToI32,
-        (F64, I64) => Bitcast::F64ToI64,
+        (I32 | Pointer | Length, I64 | PointerOrI64) => Bitcast::I32ToI64,
+        (F32, I32 | Pointer | Length) => Bitcast::F32ToI32,
+        (F64, I64 | PointerOrI64) => Bitcast::F64ToI64,
 
-        (I64, I32) => Bitcast::I64ToI32,
-        (I32, F32) => Bitcast::I32ToF32,
-        (I64, F64) => Bitcast::I64ToF64,
+        (I64 | PointerOrI64, I32 | Pointer | Length) => Bitcast::I64ToI32,
+        (I32 | Pointer | Length, F32) => Bitcast::I32ToF32,
+        (I64 | PointerOrI64, F64) => Bitcast::I64ToF64,
 
-        (F32, I64) => Bitcast::F32ToI64,
-        (I64, F32) => Bitcast::I64ToF32,
+        (F32, I64 | PointerOrI64) => Bitcast::F32ToI64,
+        (I64 | PointerOrI64, F32) => Bitcast::I64ToF32,
 
-        (F32, F64) | (F64, F32) | (F64, I32) | (I32, F64) => unreachable!(),
+        (F32, F64) | (F64, F32) | (F64, I32 | Pointer | Length) | (I32 | Pointer | Length, F64) => {
+            unreachable!()
+        }
     }
 }
 
@@ -1585,8 +1593,8 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
         | Type::Char => result.push(WasmType::I32),
 
         Type::U64 | Type::S64 => result.push(WasmType::I64),
-        Type::Float32 => result.push(WasmType::F32),
-        Type::Float64 => result.push(WasmType::F64),
+        Type::F32 => result.push(WasmType::F32),
+        Type::F64 => result.push(WasmType::F64),
         Type::String => {
             result.push(WasmType::I32);
             result.push(WasmType::I32);
