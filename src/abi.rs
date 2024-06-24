@@ -1618,9 +1618,7 @@ fn cast(from: WasmType, to: WasmType) -> Bitcast {
         (F32, I64) => Bitcast::F32ToI64,
         (I64, F32) => Bitcast::I64ToF32,
 
-        (F32, F64) | (F64, F32) | (F64, I32) | (I32, F64) => {
-            unreachable!()
-        }
+        (F32, F64) | (F64, F32) | (F64, I32) | (I32, F64) => unreachable!(),
     }
 }
 

@@ -308,7 +308,7 @@ impl Component {
                         }
                     }
                 }
-                // TODO: handle stable vs unstable interfaces
+                // FIXME: handle stable vs unstable interfaces
                 WorldItem::Interface {
                     id: x,
                     stability: _,
@@ -362,7 +362,7 @@ impl Component {
                         }
                     }
                 }
-                // TODO: handle stable vs unstable interfaces
+                // FIXME: handle stable vs unstable interfaces
                 WorldItem::Interface {
                     id: x,
                     stability: _,
@@ -503,7 +503,7 @@ impl Component {
                                 options: lowering_opts.clone(),
                             }
                         }
-                        // TODO: handle stable vs unstable interfaces
+                        // FIXME: handle stable vs unstable interfaces
                         WorldItem::Interface { id: i, .. } => {
                             assert_eq!(path.len(), 1);
                             let iface = &inner.resolve.interfaces[*i];
@@ -620,7 +620,6 @@ impl Component {
                     }
                 }
                 Trampoline::AlwaysTrap => {
-                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::AlwaysTrap);
                 }
                 Trampoline::ResourceNew(x) => {
@@ -633,19 +632,15 @@ impl Component {
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceDrop(*x, None));
                 }
                 Trampoline::ResourceTransferOwn => {
-                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferOwn);
                 }
                 Trampoline::ResourceTransferBorrow => {
-                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceTransferBorrow);
                 }
                 Trampoline::ResourceEnterCall => {
-                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceEnterCall);
                 }
                 Trampoline::ResourceExitCall => {
-                    // FIXME: this trampoline should be de-duplicated
                     output_trampolines.insert(idx, GeneratedTrampoline::ResourceExitCall);
                 }
             }
@@ -738,7 +733,7 @@ impl Component {
                 }
                 wasmtime_environ::component::Export::Instance { exports, .. } => {
                     let id = match item {
-                        // TODO: handle stable vs unstable interfaces
+                        // FIXME: handle stable vs unstable interfaces
                         WorldItem::Interface { id, stability: _ } => *id,
                         WorldItem::Function(_) | WorldItem::Type(_) => unreachable!(),
                     };
@@ -1746,8 +1741,17 @@ impl Instance {
                         )))
                     }
                     GeneratedTrampoline::AlwaysTrap => {
+                        if let Some(func) = ctx
+                            .as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .get(&DeduplicatedTrampoline::AlwaysTrap)
+                        {
+                            return Ok(Extern::Func(func.clone()));
+                        }
                         let ty = ty.with_name("always-trap");
-                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                        let func = wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args: &[wasm_runtime_layer::Value], results| {
@@ -1763,12 +1767,27 @@ impl Instance {
                                 );
                                 Err(wasmtime_environ::Trap::AlwaysTrapAdapter.into())
                             },
-                        )))
+                        );
+                        ctx.as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .insert(DeduplicatedTrampoline::AlwaysTrap, func.clone());
+                        Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceTransferOwn => {
+                        if let Some(func) = ctx
+                            .as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .get(&DeduplicatedTrampoline::ResourceTransferOwn)
+                        {
+                            return Ok(Extern::Func(func.clone()));
+                        }
                         let ty = ty.with_name("resource-transfer-own");
                         let tables = inner.state_table.clone();
-                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                        let func = wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
@@ -1816,12 +1835,27 @@ impl Instance {
                                 *result = wasm_runtime_layer::Value::I32(to_handle);
                                 Ok(())
                             },
-                        )))
+                        );
+                        ctx.as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .insert(DeduplicatedTrampoline::ResourceTransferOwn, func.clone());
+                        Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceTransferBorrow => {
+                        if let Some(func) = ctx
+                            .as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .get(&DeduplicatedTrampoline::ResourceTransferBorrow)
+                        {
+                            return Ok(Extern::Func(func.clone()));
+                        }
                         let ty = ty.with_name("resource-transfer-borrow");
                         let tables = inner.state_table.clone();
-                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                        let func = wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
@@ -1881,12 +1915,27 @@ impl Instance {
                                 *result = wasm_runtime_layer::Value::I32(to_handle);
                                 Ok(())
                             },
-                        )))
+                        );
+                        ctx.as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .insert(DeduplicatedTrampoline::ResourceTransferBorrow, func.clone());
+                        Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceEnterCall => {
+                        if let Some(func) = ctx
+                            .as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .get(&DeduplicatedTrampoline::ResourceEnterCall)
+                        {
+                            return Ok(Extern::Func(func.clone()));
+                        }
                         let ty = ty.with_name("resource-enter-call");
                         let tables = inner.state_table.clone();
-                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                        let func = wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
@@ -1910,12 +1959,27 @@ impl Instance {
                                 assert!(resource_call_borrows.is_empty());
                                 Ok(())
                             },
-                        )))
+                        );
+                        ctx.as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .insert(DeduplicatedTrampoline::ResourceEnterCall, func.clone());
+                        Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceExitCall => {
+                        if let Some(func) = ctx
+                            .as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .get(&DeduplicatedTrampoline::ResourceExitCall)
+                        {
+                            return Ok(Extern::Func(func.clone()));
+                        }
                         let ty = ty.with_name("resource-exit-call");
                         let tables = inner.state_table.clone();
-                        Ok(Extern::Func(wasm_runtime_layer::Func::new(
+                        let func = wasm_runtime_layer::Func::new(
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
@@ -1946,7 +2010,13 @@ impl Instance {
                                 resource_call_borrows.clear();
                                 Ok(())
                             },
-                        )))
+                        );
+                        ctx.as_context_mut()
+                            .inner
+                            .data_mut()
+                            .deduplicated_trampolines
+                            .insert(DeduplicatedTrampoline::ResourceExitCall, func.clone());
+                        Ok(Extern::Func(func))
                     }
                 }
             }
@@ -2297,6 +2367,7 @@ impl<T, E: backend::WasmEngine> Store<T, E> {
                 host_functions: FuncVec::default(),
                 host_resources: Slab::default(),
                 drop_host_resource: None,
+                deduplicated_trampolines: FxHashMap::default(),
             },
         );
 
@@ -2499,6 +2570,7 @@ struct StoreInner<T, E: backend::WasmEngine> {
     pub host_resources: Slab<Box<dyn Any + Send + Sync>>,
     /// A function that drops a host resource from this store.
     pub drop_host_resource: Option<wasm_runtime_layer::Func>,
+    pub deduplicated_trampolines: FxHashMap<DeduplicatedTrampoline, wasm_runtime_layer::Func>,
 }
 
 /// Denotes a trampoline used by components to interact with the host.
@@ -2520,6 +2592,21 @@ enum GeneratedTrampoline {
         /// Index of the linear memory to which the string is copied.
         to: RuntimeMemoryIndex,
     },
+    /// A degenerate lift/lower combination forces a trap.
+    AlwaysTrap,
+    /// An owned resource is transferred from one table to another.
+    ResourceTransferOwn,
+    /// A borrowed resource is transferred from one table to another.
+    ResourceTransferBorrow,
+    /// A call is being entered, requiring bookkeeping for resource handles.
+    ResourceEnterCall,
+    /// A call is being exited, requiring bookkeeping for resource handles.
+    ResourceExitCall,
+}
+
+/// Denotes a trampoline used by components to interact with the host.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum DeduplicatedTrampoline {
     /// A degenerate lift/lower combination forces a trap.
     AlwaysTrap,
     /// An owned resource is transferred from one table to another.
