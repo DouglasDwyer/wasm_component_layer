@@ -7,24 +7,71 @@ pub use wit_parser::abi::{AbiVariant, WasmSignature, WasmType};
 use wit_parser::*;
 
 /// Joins two WASM types.
+/// https://docs.rs/wit-parser/0.211.1/src/wit_parser/abi.rs.html#61-102
 fn join(a: WasmType, b: WasmType) -> WasmType {
     use WasmType::*;
 
     match (a, b) {
-        (I32 | Pointer | Length, I32 | Pointer | Length)
-        | (I64 | PointerOrI64, I64 | PointerOrI64)
+        (I32, I32)
+        | (I64, I64)
         | (F32, F32)
-        | (F64, F64) => a,
+        | (F64, F64)
+        | (Pointer, Pointer)
+        | (PointerOrI64, PointerOrI64)
+        | (Length, Length) => a,
 
-        (I32 | Pointer | Length, F32) | (F32, I32 | Pointer | Length) => I32,
+        (I32, F32) | (F32, I32) => I32,
 
-        (_, I64 | PointerOrI64 | F64) | (I64 | PointerOrI64 | F64, _) => I64,
+        // A length is at least an `i32`, maybe more, so it wins over
+        // 32-bit types.
+        (Length, I32 | F32) => Length,
+        (I32 | F32, Length) => Length,
+
+        // A length might be an `i64`, but might not be, so if we have
+        // 64-bit types, they win.
+        (Length, I64 | F64) => I64,
+        (I64 | F64, Length) => I64,
+
+        // Pointers have provenance and are at least an `i32`, so they
+        // win over 32-bit and length types.
+        (Pointer, I32 | F32 | Length) => Pointer,
+        (I32 | F32 | Length, Pointer) => Pointer,
+
+        // If we need 64 bits and provenance, we need to use the special
+        // `PointerOrI64`.
+        (Pointer, I64 | F64) => PointerOrI64,
+        (I64 | F64, Pointer) => PointerOrI64,
+
+        // PointerOrI64 wins over everything.
+        (PointerOrI64, _) => PointerOrI64,
+        (_, PointerOrI64) => PointerOrI64,
+
+        // Otherwise, `i64` wins.
+        (_, I64 | F64) | (I64 | F64, _) => I64,
     }
 }
 
 /// Aligns an address to a specific value.
 fn align_to(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
+}
+
+pub enum Wasm32Type {
+    I32,
+    I64,
+    F32,
+    F64,
+}
+
+impl From<WasmType> for Wasm32Type {
+    fn from(value: WasmType) -> Self {
+        match value {
+            WasmType::I32 | WasmType::Pointer | WasmType::Length => Self::I32,
+            WasmType::I64 | WasmType::PointerOrI64 => Self::I64,
+            WasmType::F32 => Self::F32,
+            WasmType::F64 => Self::F64,
+        }
+    }
 }
 
 /// Helper macro for defining instructions without having to have tons of
@@ -1555,26 +1602,23 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
 /// Generates a bitcast between two WASM types.
 fn cast(from: WasmType, to: WasmType) -> Bitcast {
-    use WasmType::*;
+    use Wasm32Type::*;
 
-    match (from, to) {
-        (I32 | Pointer | Length, I32 | Pointer | Length)
-        | (I64 | PointerOrI64, I64 | PointerOrI64)
-        | (F32, F32)
-        | (F64, F64) => Bitcast::None,
+    match (from.into(), to.into()) {
+        (I32, I32) | (I64, I64) | (F32, F32) | (F64, F64) => Bitcast::None,
 
-        (I32 | Pointer | Length, I64 | PointerOrI64) => Bitcast::I32ToI64,
-        (F32, I32 | Pointer | Length) => Bitcast::F32ToI32,
-        (F64, I64 | PointerOrI64) => Bitcast::F64ToI64,
+        (I32, I64) => Bitcast::I32ToI64,
+        (F32, I32) => Bitcast::F32ToI32,
+        (F64, I64) => Bitcast::F64ToI64,
 
-        (I64 | PointerOrI64, I32 | Pointer | Length) => Bitcast::I64ToI32,
-        (I32 | Pointer | Length, F32) => Bitcast::I32ToF32,
-        (I64 | PointerOrI64, F64) => Bitcast::I64ToF64,
+        (I64, I32) => Bitcast::I64ToI32,
+        (I32, F32) => Bitcast::I32ToF32,
+        (I64, F64) => Bitcast::I64ToF64,
 
-        (F32, I64 | PointerOrI64) => Bitcast::F32ToI64,
-        (I64 | PointerOrI64, F32) => Bitcast::I64ToF32,
+        (F32, I64) => Bitcast::F32ToI64,
+        (I64, F32) => Bitcast::I64ToF32,
 
-        (F32, F64) | (F64, F32) | (F64, I32 | Pointer | Length) | (I32 | Pointer | Length, F64) => {
+        (F32, F64) | (F64, F32) | (F64, I32) | (I32, F64) => {
             unreachable!()
         }
     }

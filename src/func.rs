@@ -426,13 +426,11 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
             }
             Instruction::ConstZero { tys } => {
                 for t in tys.iter() {
-                    match t {
-                        WasmType::I32 | WasmType::Pointer | WasmType::Length => {
-                            results.push(Value::S32(0))
-                        }
-                        WasmType::I64 | WasmType::PointerOrI64 => results.push(Value::S64(0)),
-                        WasmType::F32 => results.push(Value::F32(0.0)),
-                        WasmType::F64 => results.push(Value::F64(0.0)),
+                    match (*t).into() {
+                        Wasm32Type::I32 => results.push(Value::S32(0)),
+                        Wasm32Type::I64 => results.push(Value::S64(0)),
+                        Wasm32Type::F32 => results.push(Value::F32(0.0)),
+                        Wasm32Type::F64 => results.push(Value::F64(0.0)),
                     }
                 }
             }
