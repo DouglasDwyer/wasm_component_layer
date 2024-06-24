@@ -1204,20 +1204,6 @@ impl Instance {
         /// A counter that uniquely identifies instances.
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-        let mut instance_flags = wasmtime_environ::PrimaryMap::default();
-        for _i in 0..component.0.instance_modules.len() + 20
-        /* ??? */
-        {
-            instance_flags.push(Global::new(
-                ctx.as_context_mut().inner,
-                wasm_runtime_layer::Value::I32(
-                    wasmtime_environ::component::FLAG_MAY_LEAVE
-                        | wasmtime_environ::component::FLAG_MAY_ENTER,
-                ),
-                true,
-            ));
-        }
-
         let id = ID_COUNTER.fetch_add(1, Ordering::AcqRel);
         let map = Self::create_resource_instantiation_map(id, component, linker)?;
         let types = Self::generate_types(component, &map)?;
@@ -1232,7 +1218,7 @@ impl Instance {
             exports: Exports::new(),
             id,
             instances: Default::default(),
-            instance_flags,
+            instance_flags: Mutex::default(),
             state_table: Arc::new(StateTable {
                 dropped: AtomicBool::new(false),
                 resource_tables,
@@ -2020,7 +2006,27 @@ impl Instance {
                     }
                 }
             }
-            CoreDef::InstanceFlags(i) => Ok(Extern::Global(inner.instance_flags[*i].clone())),
+            CoreDef::InstanceFlags(i) => {
+                let mut instance_flags = inner
+                    .instance_flags
+                    .try_lock()
+                    .expect("Could not get access to instance flags.");
+                let global = if let Some(global) = instance_flags.get(*i) {
+                    global.clone()
+                } else {
+                    let global = Global::new(
+                        ctx.as_context_mut().inner,
+                        wasm_runtime_layer::Value::I32(
+                            wasmtime_environ::component::FLAG_MAY_LEAVE
+                                | wasmtime_environ::component::FLAG_MAY_ENTER,
+                        ),
+                        true,
+                    );
+                    instance_flags[*i] = global.clone();
+                    global
+                };
+                Ok(Extern::Global(global))
+            }
         }
     }
 
@@ -2291,7 +2297,7 @@ struct InstanceInner {
     /// The unique ID of this instance.
     pub id: u64,
     /// The flags associated with this instance.
-    pub instance_flags: wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>,
+    pub instance_flags: Mutex<wasmtime_environ::PrimaryMap<RuntimeComponentInstanceIndex, Global>>,
     /// The underlying instantiated WASM modules for this instance.
     pub instances: wasmtime_environ::PrimaryMap<RuntimeInstanceIndex, wasm_runtime_layer::Instance>,
     /// Stores the instance-specific state.
@@ -2570,6 +2576,7 @@ struct StoreInner<T, E: backend::WasmEngine> {
     pub host_resources: Slab<Box<dyn Any + Send + Sync>>,
     /// A function that drops a host resource from this store.
     pub drop_host_resource: Option<wasm_runtime_layer::Func>,
+    /// The map of trampolines to host funcs that can be deduplicated.
     pub deduplicated_trampolines: FxHashMap<DeduplicatedTrampoline, wasm_runtime_layer::Func>,
 }
 
