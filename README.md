@@ -12,9 +12,9 @@ It supports loading and linking WASM components, inspecting and generating compo
 To use `wasm_component_layer`, a runtime is required. The [`wasm_runtime_layer`](https://github.com/DouglasDwyer/wasm_runtime_layer) crate provides the common interface used for WebAssembly runtimes, so when using this crate it must also be added to the `Cargo.toml` file with the appropriate runtime selected. For instance, the examples in this repository use the [`wasmi_runtime_layer`](https://crates.io/crates/wasmi_runtime_layer) runtime:
 
 ```toml
-wasm_component_layer = "0.1.16"
-wasmi_runtime_layer = "0.31.0"
-# wasmtime_runtime_layer = "21.0.0"
+wasm_component_layer = "0.1.18"
+wasmi_runtime_layer = "0.32.0"
+# wasmtime_runtime_layer = "22.0.0"
 # js_wasm_runtime_layer = "0.4.0"
 ```
 
@@ -78,10 +78,13 @@ pub fn main() {
 - Structural equality of component interface types, as mandated by the spec
 - Support for guest resources
 - Support for strongly-typed host resources with destructors
+- UTF8-copy string transcoder for 32bit memories
+- Resource transfers (owned and borrowed) across component boundaries
 
 The following things have yet to be implemented:
 
-- String transcoders
+- Stable vs unstable WIT interfaces and feature selection
+- Other string transcoders
 - A macro for generating host bindings
 - More comprehensive tests
 - Subtyping
