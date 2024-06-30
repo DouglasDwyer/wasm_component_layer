@@ -7,14 +7,46 @@ pub use wit_parser::abi::{AbiVariant, WasmSignature, WasmType};
 use wit_parser::*;
 
 /// Joins two WASM types.
+/// https://docs.rs/wit-parser/0.211.1/src/wit_parser/abi.rs.html#61-102
 fn join(a: WasmType, b: WasmType) -> WasmType {
     use WasmType::*;
 
     match (a, b) {
-        (I32, I32) | (I64, I64) | (F32, F32) | (F64, F64) => a,
+        (I32, I32)
+        | (I64, I64)
+        | (F32, F32)
+        | (F64, F64)
+        | (Pointer, Pointer)
+        | (PointerOrI64, PointerOrI64)
+        | (Length, Length) => a,
 
         (I32, F32) | (F32, I32) => I32,
 
+        // A length is at least an `i32`, maybe more, so it wins over
+        // 32-bit types.
+        (Length, I32 | F32) => Length,
+        (I32 | F32, Length) => Length,
+
+        // A length might be an `i64`, but might not be, so if we have
+        // 64-bit types, they win.
+        (Length, I64 | F64) => I64,
+        (I64 | F64, Length) => I64,
+
+        // Pointers have provenance and are at least an `i32`, so they
+        // win over 32-bit and length types.
+        (Pointer, I32 | F32 | Length) => Pointer,
+        (I32 | F32 | Length, Pointer) => Pointer,
+
+        // If we need 64 bits and provenance, we need to use the special
+        // `PointerOrI64`.
+        (Pointer, I64 | F64) => PointerOrI64,
+        (I64 | F64, Pointer) => PointerOrI64,
+
+        // PointerOrI64 wins over everything.
+        (PointerOrI64, _) => PointerOrI64,
+        (_, PointerOrI64) => PointerOrI64,
+
+        // Otherwise, `i64` wins.
         (_, I64 | F64) | (I64 | F64, _) => I64,
     }
 }
@@ -22,6 +54,24 @@ fn join(a: WasmType, b: WasmType) -> WasmType {
 /// Aligns an address to a specific value.
 fn align_to(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
+}
+
+pub enum Wasm32Type {
+    I32,
+    I64,
+    F32,
+    F64,
+}
+
+impl From<WasmType> for Wasm32Type {
+    fn from(value: WasmType) -> Self {
+        match value {
+            WasmType::I32 | WasmType::Pointer | WasmType::Length => Self::I32,
+            WasmType::I64 | WasmType::PointerOrI64 => Self::I64,
+            WasmType::F32 => Self::F32,
+            WasmType::F64 => Self::F64,
+        }
+    }
 }
 
 /// Helper macro for defining instructions without having to have tons of
@@ -782,8 +832,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::S64 => self.emit(&I64FromS64),
             Type::U64 => self.emit(&I64FromU64),
             Type::Char => self.emit(&I32FromChar),
-            Type::Float32 => self.emit(&F32FromFloat32),
-            Type::Float64 => self.emit(&F64FromFloat64),
+            Type::F32 => self.emit(&F32FromFloat32),
+            Type::F64 => self.emit(&F64FromFloat64),
             Type::String => {
                 let realloc = self.list_realloc();
                 self.emit(&StringLower { realloc })
@@ -958,8 +1008,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::S64 => self.emit(&S64FromI64),
             Type::U64 => self.emit(&U64FromI64),
             Type::Char => self.emit(&CharFromI32),
-            Type::Float32 => self.emit(&Float32FromF32),
-            Type::Float64 => self.emit(&Float64FromF64),
+            Type::F32 => self.emit(&Float32FromF32),
+            Type::F64 => self.emit(&Float64FromF64),
             Type::String => self.emit(&StringLift),
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Type(t) => self.lift(t),
@@ -1153,8 +1203,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
                 self.lower_and_emit(ty, addr, &I32Store { offset })
             }
             Type::U64 | Type::S64 => self.lower_and_emit(ty, addr, &I64Store { offset }),
-            Type::Float32 => self.lower_and_emit(ty, addr, &F32Store { offset }),
-            Type::Float64 => self.lower_and_emit(ty, addr, &F64Store { offset }),
+            Type::F32 => self.lower_and_emit(ty, addr, &F32Store { offset }),
+            Type::F64 => self.lower_and_emit(ty, addr, &F64Store { offset }),
             Type::String => self.write_list_to_memory(ty, addr, offset),
 
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -1340,8 +1390,8 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             Type::S16 => self.emit_and_lift(ty, addr, &I32Load16S { offset }),
             Type::U32 | Type::S32 | Type::Char => self.emit_and_lift(ty, addr, &I32Load { offset }),
             Type::U64 | Type::S64 => self.emit_and_lift(ty, addr, &I64Load { offset }),
-            Type::Float32 => self.emit_and_lift(ty, addr, &F32Load { offset }),
-            Type::Float64 => self.emit_and_lift(ty, addr, &F64Load { offset }),
+            Type::F32 => self.emit_and_lift(ty, addr, &F32Load { offset }),
+            Type::F64 => self.emit_and_lift(ty, addr, &F64Load { offset }),
             Type::String => self.read_list_from_memory(ty, addr, offset),
 
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -1552,9 +1602,9 @@ impl<'a, B: Bindgen> Generator<'a, B> {
 
 /// Generates a bitcast between two WASM types.
 fn cast(from: WasmType, to: WasmType) -> Bitcast {
-    use WasmType::*;
+    use Wasm32Type::*;
 
-    match (from, to) {
+    match (from.into(), to.into()) {
         (I32, I32) | (I64, I64) | (F32, F32) | (F64, F64) => Bitcast::None,
 
         (I32, I64) => Bitcast::I32ToI64,
@@ -1585,8 +1635,8 @@ fn push_wasm(resolve: &Resolve, variant: AbiVariant, ty: &Type, result: &mut Vec
         | Type::Char => result.push(WasmType::I32),
 
         Type::U64 | Type::S64 => result.push(WasmType::I64),
-        Type::Float32 => result.push(WasmType::F32),
-        Type::Float64 => result.push(WasmType::F64),
+        Type::F32 => result.push(WasmType::F32),
+        Type::F64 => result.push(WasmType::F64),
         Type::String => {
             result.push(WasmType::I32);
             result.push(WasmType::I32);

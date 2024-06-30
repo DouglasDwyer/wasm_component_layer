@@ -4,3 +4,7 @@
 /examples/resource/Cargo.lock
 /examples/single_component/target
 /examples/single_component/Cargo.lock
+/examples/transfer/inner/target
+/examples/transfer/inner/Cargo.lock
+/examples/transfer/outer/target
+/examples/transfer/outer/Cargo.lock

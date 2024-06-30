@@ -1,7 +1,7 @@
 cargo-features = ["per-package-target"]
 
 [package]
-name = "single_component_component"
+name = "transfer_inner_component"
 version = "0.1.0"
 edition = "2021"
 
