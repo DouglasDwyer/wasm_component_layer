@@ -1681,6 +1681,7 @@ impl Instance {
                         )))
                     }
                     GeneratedTrampoline::Utf8CopyTranscoder { from, to } => {
+                        eprintln!("generate Utf8CopyTranscoder trampoline");
                         let from_memory = Self::core_export(
                             inner,
                             &ctx,
@@ -1704,20 +1705,21 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |mut ctx, args, results| {
-                                let (from_ptr, to_ptr, len) = match args {
+                                eprintln!("transcode-copy-utf8-{from}-{to}({args:?}, {results:?}) enter");
+                                let (from_ptr, len, to_ptr) = match args {
                                     [
                                         wasm_runtime_layer::Value::I32(from_ptr),
-                                        wasm_runtime_layer::Value::I32(to_ptr),
                                         wasm_runtime_layer::Value::I32(len),
-                                    ] => (from_ptr, to_ptr, len),
+                                        wasm_runtime_layer::Value::I32(to_ptr),
+                                    ] => (from_ptr, len, to_ptr),
                                     args => bail!(
                                         "transcode-copy-utf8-{}-{}(from-ptr: i32, to-ptr: i32, len: i32)\
                                          called with unexpected args {:?}", from, to, args
                                     ),
                                 };
                                 let from_ptr = usize::try_from(*from_ptr)?;
-                                let to_ptr = usize::try_from(*to_ptr)?;
                                 let len = usize::try_from(*len)?;
+                                let to_ptr = usize::try_from(*to_ptr)?;
                                 ensure!(
                                     results.is_empty(),
                                     "transcode-copy-utf8-{}-{}(from-ptr: i32, to-ptr: i32, len: i32) \
@@ -1726,6 +1728,7 @@ impl Instance {
                                 let mut buffer = vec![0_u8; len];
                                 from_memory.read(&mut ctx, from_ptr, &mut buffer)?;
                                 to_memory.write(ctx, to_ptr, &buffer)?;
+                                eprintln!("transcode-copy-utf8-{from}-{to}({args:?}, {results:?}) exit");
                                 Ok(())
                             },
                         )))
@@ -1766,6 +1769,7 @@ impl Instance {
                         Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceTransferOwn => {
+                        eprintln!("generate ResourceTransferOwn trampoline");
                         if let Some(func) = ctx
                             .as_context_mut()
                             .inner
@@ -1781,6 +1785,7 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
+                                eprintln!("resource-transfer-own({args:?}, {results:?}) enter");
                                 let (handle, from_rid, to_rid) = match args {
                                     [
                                         wasm_runtime_layer::Value::I32(handle),
@@ -1823,6 +1828,7 @@ impl Instance {
                                     resource: from_handle.resource,
                                 });
                                 *result = wasm_runtime_layer::Value::I32(to_handle);
+                                eprintln!("resource-transfer-own({args:?}, {results:?}) exit");
                                 Ok(())
                             },
                         );
@@ -1834,6 +1840,7 @@ impl Instance {
                         Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceTransferBorrow => {
+                        eprintln!("generate ResourceTransferBorrow trampoline");
                         if let Some(func) = ctx
                             .as_context_mut()
                             .inner
@@ -1849,6 +1856,7 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
+                                eprintln!("resource-transfer-borrow({args:?}, {results:?}) enter");
                                 let (handle, from_rid, to_rid) = match args {
                                     [
                                         wasm_runtime_layer::Value::I32(handle),
@@ -1903,6 +1911,7 @@ impl Instance {
                                     to_handle
                                 };
                                 *result = wasm_runtime_layer::Value::I32(to_handle);
+                                eprintln!("resource-transfer-borrow({args:?}, {results:?}) exit");
                                 Ok(())
                             },
                         );
@@ -1914,6 +1923,7 @@ impl Instance {
                         Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceEnterCall => {
+                        eprintln!("generate ResourceEnterCall trampoline");
                         if let Some(func) = ctx
                             .as_context_mut()
                             .inner
@@ -1929,6 +1939,7 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
+                                eprintln!("resource-enter-call({args:?}, {results:?})");
                                 ensure!(
                                     args.is_empty(),
                                     "resource-enter-call() called with unexpected args {:?}",
@@ -1940,7 +1951,7 @@ impl Instance {
                                     results
                                 );
                                 // As in Jco, ResourceEnterCall is a no-op since all logic
-                                //  is handled in ResourceEnterCall and resource_call_borrows
+                                //  is handled in ResourceExitCall and resource_call_borrows
                                 //  should be empty here
                                 let resource_call_borrows =
                                     tables.resource_call_borrows.try_lock().expect(
@@ -1958,6 +1969,7 @@ impl Instance {
                         Ok(Extern::Func(func))
                     }
                     GeneratedTrampoline::ResourceExitCall => {
+                        eprintln!("generate ResourceExitCall trampoline");
                         if let Some(func) = ctx
                             .as_context_mut()
                             .inner
@@ -1973,6 +1985,7 @@ impl Instance {
                             ctx.as_context_mut().inner,
                             ty,
                             move |_ctx, args, results| {
+                                eprintln!("resource-exit-call({args:?}, {results:?})");
                                 ensure!(
                                     args.is_empty(),
                                     "resource-exit-call() called with unexpected args {:?}",
@@ -2015,19 +2028,18 @@ impl Instance {
                     .instance_flags
                     .try_lock()
                     .expect("Could not get access to instance flags.");
-                let global = if let Some(global) = instance_flags.get(*i) {
-                    global.clone()
-                } else {
-                    let global = Global::new(
+                let global = loop {
+                    if let Some(global) = instance_flags.get(*i) {
+                        break global.clone();
+                    }
+                    instance_flags.push(Global::new(
                         ctx.as_context_mut().inner,
                         wasm_runtime_layer::Value::I32(
                             wasmtime_environ::component::FLAG_MAY_LEAVE
                                 | wasmtime_environ::component::FLAG_MAY_ENTER,
                         ),
                         true,
-                    );
-                    instance_flags[*i] = global.clone();
-                    global
+                    ));
                 };
                 Ok(Extern::Global(global))
             }

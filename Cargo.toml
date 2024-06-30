@@ -20,11 +20,13 @@ serde = { version = "1.0.193", optional = true, default-features = false, featur
 slab = { version = "0.4.9", default-features = false }
 wasm_runtime_layer = { version = "0.4.0", default-features = false }
 wasmtime-environ = { version = "22.0.0", features = [ "compile", "component-model" ] }
-wit-component = { version = "0.211.0", default-features = false }
-wit-parser = { version = "0.211.0", default-features = false }
+wit-component = { version = "0.212.0", default-features = false }
+wit-parser = { version = "0.212.0", default-features = false }
 
 [features]
 serde = [ "dep:serde", "semver/serde" ]
 
 [dev-dependencies]
 wasmi_runtime_layer = { version = "0.32.0" }
+wasmtime_runtime_layer = { version = "22.0.0" }
+wasmtime = { version = "22.0.0", features = ["component-model"] }

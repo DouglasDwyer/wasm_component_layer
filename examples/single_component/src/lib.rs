@@ -1,9 +1,7 @@
 wit_bindgen::generate!({
     path: "wit/component.wit",
-    exports: {
-        "test:guest/foo": Foo
-    }
 });
+export!(Foo);
 
 struct Foo;
 

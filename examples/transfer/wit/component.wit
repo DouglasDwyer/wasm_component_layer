@@ -1,0 +1,30 @@
+package test:guest;
+
+interface inner {
+    resource myresource { 
+        constructor(a: s32);
+        display: func() -> string;
+    }
+    consume-resource: func(r: myresource) -> string;
+    borrow-resource: func(r: borrow<myresource>) -> string;
+}
+
+interface outer {
+    use inner.{myresource};
+    make-resource: func(a: s32) -> myresource;
+    consume-resource: func(r: myresource) -> string;
+    borrow-resource: func(r: borrow<myresource>) -> string;
+}
+
+world inner-guest {
+    export inner;
+}
+
+world outer-guest {
+    import inner;
+    export outer;
+}
+
+world host {
+    import outer;
+}
