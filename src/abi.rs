@@ -886,7 +886,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         let mut casts = Vec::new();
         push_wasm(self.resolve, self.variant, ty, &mut results);
 
-        let payload_name = self.stack.pop().unwrap();
+        let payload_name = self.stack.pop();
         self.emit(&I32Const { val: discriminant })?;
         let mut pushed = 1;
         if let Some(ty) = cases
@@ -894,28 +894,32 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             .nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
-            // Using the payload of this block we lower the type to
-            // raw wasm values.
-            self.stack.push(payload_name);
-            self.lower(ty)?;
+            if let Some(payload_name) = payload_name {
+                // Using the payload of this block we lower the type to
+                // raw wasm values.
+                self.stack.push(payload_name);
+                self.lower(ty)?;
 
-            // Determine the types of all the wasm values we just
-            // pushed, and record how many. If we pushed too few
-            // then we'll need to push some zeros after this.
-            temp.truncate(0);
-            push_wasm(self.resolve, self.variant, ty, &mut temp);
-            pushed += temp.len();
+                // Determine the types of all the wasm values we just
+                // pushed, and record how many. If we pushed too few
+                // then we'll need to push some zeros after this.
+                temp.truncate(0);
+                push_wasm(self.resolve, self.variant, ty, &mut temp);
+                pushed += temp.len();
 
-            // For all the types pushed we may need to insert some
-            // bitcasts. This will go through and cast everything
-            // to the right type to ensure all blocks produce the
-            // same set of results.
-            casts.truncate(0);
-            for (actual, expected) in temp.iter().zip(&results[1..]) {
-                casts.push(cast(*actual, *expected));
-            }
-            if casts.iter().any(|c| *c != Bitcast::None) {
-                self.emit(&Bitcasts { casts: &casts })?;
+                // For all the types pushed we may need to insert some
+                // bitcasts. This will go through and cast everything
+                // to the right type to ensure all blocks produce the
+                // same set of results.
+                casts.truncate(0);
+                for (actual, expected) in temp.iter().zip(&results[1..]) {
+                    casts.push(cast(*actual, *expected));
+                }
+                if casts.iter().any(|c| *c != Bitcast::None) {
+                    self.emit(&Bitcasts { casts: &casts })?;
+                }
+            } else {
+                unreachable!()
             }
         }
 
@@ -1269,7 +1273,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         let payload_offset =
             offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
 
-        let payload_name = self.stack.pop().unwrap();
+        let payload_name = self.stack.pop();
         self.emit(&Instruction::I32Const { val: discriminant })?;
         self.stack.push(addr.clone());
         self.store_intrepr(offset, tag)?;
@@ -1278,8 +1282,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             .nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
-            self.stack.push(payload_name);
-            self.write_to_memory(ty, addr, payload_offset)?;
+            if let Some(payload_name) = payload_name {
+                self.stack.push(payload_name);
+                self.write_to_memory(ty, addr, payload_offset)?;
+            } else {
+                unreachable!()
+            }
         }
 
         Ok(())
