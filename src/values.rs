@@ -1582,6 +1582,7 @@ impl_unary!(
     [T: ComponentType] Box<T>,
     [T: ComponentType] Vec<T>,
     [T: ComponentType, U: ComponentType] Result<T, U>,
+    [] Result<(), ()>,
     [U: ComponentType] Result<(), U>,
     [T: ComponentType] Result<T, ()>,
 );
