@@ -1,0 +1,15 @@
+package test:guest;
+
+interface host {
+    param-list: func(param-u8: list<u8>, param-s16: list<s16>);
+}
+
+interface run {
+    start: func();
+}
+
+world guest {
+    import host;
+
+    export run;
+}

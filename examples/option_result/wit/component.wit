@@ -1,0 +1,21 @@
+package test:guest;
+
+interface host {
+    log: func(message: string);
+
+    result-option: func(is-some: bool) -> option<string>;
+    result-result: func(is-ok: bool) -> result<string, string>;
+    result-result-ok: func(is-ok: bool) -> result<string>;
+    result-result-err: func(is-ok: bool) -> result<_, string>;
+    result-result-none: func(is-ok: bool) -> result;
+}
+
+interface run {
+    start: func();
+}
+
+world guest {
+    import host;
+
+    export run;
+}

@@ -2,7 +2,7 @@ use anyhow::*;
 use wasm_component_layer::*;
 
 // The bytes of the component.
-const WASM: &[u8] = include_bytes!("value_none/component.wasm");
+const WASM: &[u8] = include_bytes!("option_result/component.wasm");
 
 pub fn main() {
     let engine = Engine::new(wasmi_runtime_layer::Engine::default());
@@ -29,7 +29,7 @@ pub fn main() {
         )
         .unwrap();
 
-    let ty_result_option = OptionType::new(ValueType::S32);
+    let ty_result_option = OptionType::new(ValueType::String);
     host_interface
         .define_func(
             "result-option",
@@ -41,8 +41,12 @@ pub fn main() {
                 ),
                 move |_, params, results| {
                     if let Value::Bool(is_some) = params[0] {
-                        println!("[HostLog]: result-option.params ( is_some: {:?} )", is_some);
-                        let result = if is_some { Some(Value::S32(1)) } else { None };
+                        println!("[HostLog] result-option.params ( is_some: {:?} )", is_some);
+                        let result = if is_some {
+                            Some(Value::String("OK".into()))
+                        } else {
+                            None
+                        };
                         results[0] = Value::Option(
                             OptionValue::new(ty_result_option.clone(), result).unwrap(),
                         );
@@ -53,7 +57,7 @@ pub fn main() {
         )
         .unwrap();
 
-    let ty_result_result = ResultType::new(Some(ValueType::S32), Some(ValueType::S32));
+    let ty_result_result = ResultType::new(Some(ValueType::String), Some(ValueType::String));
     host_interface
         .define_func(
             "result-result",
@@ -65,11 +69,11 @@ pub fn main() {
                 ),
                 move |_, params, results| {
                     if let Value::Bool(is_ok) = params[0] {
-                        println!("[HostLog]: result-result.params ( is_ok {:?} )", is_ok);
+                        println!("[HostLog] result-result.params ( is_ok {:?} )", is_ok);
                         let result = if is_ok {
-                            Result::Ok(Some(Value::S32(1)))
+                            Result::Ok(Some(Value::String("OK".into())))
                         } else {
-                            Result::Err(Some(Value::S32(0)))
+                            Result::Err(Some(Value::String("Err".into())))
                         };
                         results[0] = Value::Result(
                             ResultValue::new(ty_result_result.clone(), result).unwrap(),
@@ -81,7 +85,7 @@ pub fn main() {
         )
         .unwrap();
 
-    let ty_result_result_ok = ResultType::new(Some(ValueType::S32), None);
+    let ty_result_result_ok = ResultType::new(Some(ValueType::String), None);
     host_interface
         .define_func(
             "result-result-ok",
@@ -93,9 +97,9 @@ pub fn main() {
                 ),
                 move |_, params, results| {
                     if let Value::Bool(is_ok) = params[0] {
-                        println!("[HostLog]: result-result-ok.params ( is_ok {:?} )", is_ok);
+                        println!("[HostLog] result-result-ok.params ( is_ok {:?} )", is_ok);
                         let result = if is_ok {
-                            Result::Ok(Some(Value::S32(1)))
+                            Result::Ok(Some(Value::String("OK".into())))
                         } else {
                             Result::Err(None)
                         };
@@ -109,7 +113,7 @@ pub fn main() {
         )
         .unwrap();
 
-    let ty_result_result_err = ResultType::new(None, Some(ValueType::S32));
+    let ty_result_result_err = ResultType::new(None, Some(ValueType::String));
     host_interface
         .define_func(
             "result-result-err",
@@ -121,11 +125,11 @@ pub fn main() {
                 ),
                 move |_, params, results| {
                     if let Value::Bool(is_ok) = params[0] {
-                        println!("[HostLog]: result-result-err.params ( is_ok {:?} )", is_ok);
+                        println!("[HostLog] result-result-err.params ( is_ok {:?} )", is_ok);
                         let result = if is_ok {
                             Result::Ok(None)
                         } else {
-                            Result::Err(Some(Value::S32(0)))
+                            Result::Err(Some(Value::String("Err".into())))
                         };
                         results[0] = Value::Result(
                             ResultValue::new(ty_result_result_err.clone(), result).unwrap(),
@@ -149,7 +153,7 @@ pub fn main() {
                 ),
                 move |_, params, results| {
                     if let Value::Bool(is_ok) = params[0] {
-                        println!("[HostLog]: result-result-none.params ( is_ok {:?} )", is_ok);
+                        println!("[HostLog] result-result-none.params ( is_ok {:?} )", is_ok);
                         let result = if is_ok {
                             Result::Ok(None)
                         } else {
@@ -164,60 +168,6 @@ pub fn main() {
             ),
         )
         .unwrap();
-
-    let ty_params_option = OptionType::new(ValueType::S32);
-    host_interface
-        .define_func(
-            "params-option",
-            Func::new(
-                &mut store,
-                FuncType::new(
-                    [ValueType::Option(ty_params_option.clone())],
-                    [ValueType::String],
-                ),
-                move |_, params, results| {
-                    if let Value::Option(param) = &params[0] {
-                        let param = match **param {
-                            Some(ref value) => Some(value),
-                            None => None,
-                        };
-                        println!("[HostLog]: params-option.params {:?}", param);
-                        results[0] = Value::String(format!("{:?}", param).into());
-                    }
-                    Ok(())
-                },
-            ),
-        )
-        .unwrap();
-
-    // let ty_params_result = ResultType::new(Some(ValueType::S32), Some(ValueType::S32));
-    // host_interface
-    //     .define_func(
-    //         "params-result",
-    //         Func::new(
-    //             &mut store,
-    //             FuncType::new(
-    //                 [ValueType::Result(ty_params_result.clone())],
-    //                 [ValueType::String],
-    //             ),
-    //             move |_, params, results| {
-    //                 if let Value::Result(param) = &params[0] {
-    //                     let param = match **param {
-    //                         std::result::Result::Ok(ref value) => {
-    //                             std::result::Result::Ok(value.clone().unwrap())
-    //                         }
-    //                         std::result::Result::Err(ref value) => {
-    //                             std::result::Result::Err(value.clone().unwrap())
-    //                         }
-    //                     };
-    //                     println!("[HostLog]: params-result.params {:?}", param);
-    //                     results[0] = Value::String(format!("{:?}", param).into());
-    //                 }
-    //                 Ok(())
-    //             },
-    //         ),
-    //     )
-    //     .unwrap();
 
     let instance = linker.instantiate(&mut store, &component).unwrap();
     let interface = instance

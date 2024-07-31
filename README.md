@@ -100,6 +100,7 @@ rustup toolchain install nightly
 rustup override set nightly
 cargo build
 wasm-tools component new target/wasm32-unknown-unknown/debug/component_example.wasm -o component.wasm
+wasm-tools print component.wasm -o component.wat
 
 # run example in host implementation
 cd ../../
