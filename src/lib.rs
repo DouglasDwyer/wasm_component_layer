@@ -1268,7 +1268,7 @@ impl Instance {
             );
 
             while let TypeDefKind::Type(Type::Id(id_ref)) = val.kind {
-                id = id_ref; // TODO: Should I change the id for `from_component_typedef` in L:1278?
+                id = id_ref;
                 val = &component.0.resolve.types[id_ref];
             }
 

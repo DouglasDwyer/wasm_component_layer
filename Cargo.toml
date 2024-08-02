@@ -1,6 +1,6 @@
 [package]
 name = "wasm_component_layer"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/DouglasDwyer/wasm_component_layer"
@@ -10,13 +10,13 @@ WebAssembly component model implementation for any backend.
 """
 
 [dependencies]
-anyhow = { version = "1.0.75", default-features = false }
-bytemuck = { version = "1.14.0", default-features = false, features = [ "extern_crate_alloc" ] }
+anyhow = { version = "1.0.86", default-features = false }
+bytemuck = { version = "1.16.3", default-features = false, features = [ "extern_crate_alloc" ] }
 fxhash = "0.2.1"
 id-arena = { version = "2.2.1", default-features = false }
-ref-cast = { version = "1.0.20", default-features = false }
-semver = { version = "1.0.20", default-features = false }
-serde = { version = "1.0.193", optional = true, default-features = false, features = [ "derive", "rc" ] }
+ref-cast = { version = "1.0.23", default-features = false }
+semver = { version = "1.0.23", default-features = false }
+serde = { version = "1.0.204", optional = true, default-features = false, features = [ "derive", "rc" ] }
 slab = { version = "0.4.9", default-features = false }
 wasm_runtime_layer = { version = ">=0.4.0", default-features = false }
 wasmtime-environ = { version = "18.0.1", features = [ "component-model" ] }
