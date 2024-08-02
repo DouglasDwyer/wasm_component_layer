@@ -1027,6 +1027,9 @@ impl<'a, C: AsContextMut> Bindgen for FuncBindgen<'a, C> {
                     discriminant_value.set((discriminant as i32, false));
                 }
             }
+            Instruction::ExtractReadVariantDiscriminant { value, .. } => {
+                value.set(require_matches!(operands.pop(), Some(Value::S32(x)), x))
+            }
             Instruction::VariantLift {
                 ty, discriminant, ..
             } => {
