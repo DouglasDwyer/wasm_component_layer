@@ -1,6 +1,6 @@
-/target
+.DS_Store
+/target/
 /Cargo.lock
-/examples/resource/target
-/examples/resource/Cargo.lock
-/examples/single_component/target
-/examples/single_component/Cargo.lock
+/examples/*/target/
+/examples/*/Cargo.lock
+/examples/*/component.wat

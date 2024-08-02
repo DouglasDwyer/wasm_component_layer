@@ -36,7 +36,7 @@ macro_rules! def_instruction {
                     $($field:ident : $field_ty:ty $(,)* )*
                 } )?
                     :
-                [$num_popped:expr] => [$num_pushed:expr],
+                [$num_popped:expr]$(:[$offset_popped:expr])? => [$num_pushed:expr],
             )*
         }
     ) => {
@@ -63,6 +63,22 @@ macro_rules! def_instruction {
                                 $field,
                             )*
                         } )? => $num_popped,
+                    )*
+                }
+            }
+
+            /// What is the offset when this instruction pops operands off the stack?
+            #[allow(unused_variables)]
+            pub fn operands_offset(&self) -> usize {
+                match self {
+                    $(
+                        Self::$variant $( {
+                            $(
+                                $field,
+                            )*
+                        } )? => {
+                            0 $(+ $offset_popped)?
+                        },
                     )*
                 }
             }
@@ -377,6 +393,12 @@ def_instruction! {
         /// Pops a variant value from the stack, and stores the discriminant in the instruction.
         /// Pushes a value onto the stack if one exists.
         ExtractVariantDiscriminant { discriminant_value: Cell<(i32, bool)> } : [1] => [if discriminant_value.get().1 { 1 } else { 0 }],
+
+        /// Pops operands where offset size from the stack.
+        ExtractReadVariantDiscriminant {
+            value: Cell<i32>,
+            operands_offset: usize,
+        } : [1]:[operands_offset] => [0],
 
         /// Pops an `i32` off the stack as well as `ty.cases.len()` blocks
         /// from the code generator. Uses each of those blocks and the value
@@ -747,8 +769,16 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             "not enough operands on stack for {:?}",
             inst
         );
-        self.operands
-            .extend(self.stack.drain((self.stack.len() - operands_len)..));
+        let operands_offset = inst.operands_offset();
+        if operands_offset > 0 {
+            self.operands.extend(self.stack.drain(
+                (self.stack.len() - (operands_offset - 1) - operands_len)
+                    ..(self.stack.len() - (operands_offset - 1)),
+            ));
+        } else {
+            self.operands
+                .extend(self.stack.drain((self.stack.len() - operands_len)..));
+        }
         self.results.reserve(inst.results_len());
 
         self.bindgen
@@ -886,7 +916,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         let mut casts = Vec::new();
         push_wasm(self.resolve, self.variant, ty, &mut results);
 
-        let payload_name = self.stack.pop().unwrap();
+        let payload_name = self.stack.pop();
         self.emit(&I32Const { val: discriminant })?;
         let mut pushed = 1;
         if let Some(ty) = cases
@@ -894,28 +924,32 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             .nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
-            // Using the payload of this block we lower the type to
-            // raw wasm values.
-            self.stack.push(payload_name);
-            self.lower(ty)?;
+            if let Some(payload_name) = payload_name {
+                // Using the payload of this block we lower the type to
+                // raw wasm values.
+                self.stack.push(payload_name);
+                self.lower(ty)?;
 
-            // Determine the types of all the wasm values we just
-            // pushed, and record how many. If we pushed too few
-            // then we'll need to push some zeros after this.
-            temp.truncate(0);
-            push_wasm(self.resolve, self.variant, ty, &mut temp);
-            pushed += temp.len();
+                // Determine the types of all the wasm values we just
+                // pushed, and record how many. If we pushed too few
+                // then we'll need to push some zeros after this.
+                temp.truncate(0);
+                push_wasm(self.resolve, self.variant, ty, &mut temp);
+                pushed += temp.len();
 
-            // For all the types pushed we may need to insert some
-            // bitcasts. This will go through and cast everything
-            // to the right type to ensure all blocks produce the
-            // same set of results.
-            casts.truncate(0);
-            for (actual, expected) in temp.iter().zip(&results[1..]) {
-                casts.push(cast(*actual, *expected));
-            }
-            if casts.iter().any(|c| *c != Bitcast::None) {
-                self.emit(&Bitcasts { casts: &casts })?;
+                // For all the types pushed we may need to insert some
+                // bitcasts. This will go through and cast everything
+                // to the right type to ensure all blocks produce the
+                // same set of results.
+                casts.truncate(0);
+                for (actual, expected) in temp.iter().zip(&results[1..]) {
+                    casts.push(cast(*actual, *expected));
+                }
+                if casts.iter().any(|c| *c != Bitcast::None) {
+                    self.emit(&Bitcasts { casts: &casts })?;
+                }
+            } else {
+                unreachable!()
             }
         }
 
@@ -1088,11 +1122,14 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         ty: &Type,
         cases: impl IntoIterator<Item = Option<&'b Type>>,
     ) -> Result<(i32, bool)> {
-        let variant = Instruction::ReadI32 {
+        let mut operands = Vec::new();
+        push_wasm(self.resolve, self.variant, ty, &mut operands);
+        let variant = Instruction::ExtractReadVariantDiscriminant {
             value: Cell::default(),
+            operands_offset: operands.len(),
         };
         self.emit(&variant)?;
-        if let Instruction::ReadI32 { value } = variant {
+        if let Instruction::ExtractReadVariantDiscriminant { value, .. } = variant {
             let discriminant = value.get();
             let mut params = Vec::new();
             let mut temp = Vec::new();
@@ -1269,7 +1306,7 @@ impl<'a, B: Bindgen> Generator<'a, B> {
         let payload_offset =
             offset + (self.bindgen.sizes().payload_offset(tag, cases.clone()) as i32);
 
-        let payload_name = self.stack.pop().unwrap();
+        let payload_name = self.stack.pop();
         self.emit(&Instruction::I32Const { val: discriminant })?;
         self.stack.push(addr.clone());
         self.store_intrepr(offset, tag)?;
@@ -1278,8 +1315,12 @@ impl<'a, B: Bindgen> Generator<'a, B> {
             .nth(discriminant as usize)
             .ok_or_else(|| Error::msg("Invalid discriminator value."))?
         {
-            self.stack.push(payload_name);
-            self.write_to_memory(ty, addr, payload_offset)?;
+            if let Some(payload_name) = payload_name {
+                self.stack.push(payload_name);
+                self.write_to_memory(ty, addr, payload_offset)?;
+            } else {
+                unreachable!()
+            }
         }
 
         Ok(())

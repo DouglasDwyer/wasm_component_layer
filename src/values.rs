@@ -858,6 +858,33 @@ impl ResourceOwn {
         }
     }
 
+    /// Gets the internal mut representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
+    pub fn rep_mut<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+        &self,
+        ctx: &'a mut crate::StoreContextMut<S, E>,
+    ) -> Result<&'a mut T> {
+        ensure!(
+            self.store_id == ctx.as_context().inner.data().id,
+            "Incorrect store."
+        );
+        ensure!(
+            self.tracker.load(Ordering::Acquire) < usize::MAX,
+            "Resource was already destroyed."
+        );
+
+        if self.ty.host_destructor().is_some() {
+            ctx.inner
+                .data_mut()
+                .host_resources
+                .get_mut(self.rep as usize)
+                .expect("Resource was not present.")
+                .downcast_mut()
+                .context("Resource was not of requested type.")
+        } else {
+            bail!("Cannot get the representation for a guest-owned resource.");
+        }
+    }
+
     /// Gets the type of this value.
     pub fn ty(&self) -> ResourceType {
         self.ty.clone()
@@ -1011,6 +1038,33 @@ impl ResourceBorrow {
                 .get(self.rep as usize)
                 .expect("Resource was not present.")
                 .downcast_ref()
+                .context("Resource was not of requested type.")
+        } else {
+            bail!("Cannot get the representation for a guest-owned resource.");
+        }
+    }
+
+    /// Gets the internal mut representation of this resource. Fails if this is not a host resource, or if the resource was already dropped.
+    pub fn rep_mut<'a, T: 'static + Send + Sync, S, E: wasm_runtime_layer::backend::WasmEngine>(
+        &self,
+        ctx: &'a mut crate::StoreContextMut<S, E>,
+    ) -> Result<&'a mut T> {
+        ensure!(
+            self.store_id == ctx.as_context().inner.data().id,
+            "Incorrect store."
+        );
+        ensure!(
+            !self.dead.load(Ordering::Acquire),
+            "Borrow was already dropped."
+        );
+
+        if self.ty.host_destructor().is_some() {
+            ctx.inner
+                .data_mut()
+                .host_resources
+                .get_mut(self.rep as usize)
+                .expect("Resource was not present.")
+                .downcast_mut()
                 .context("Resource was not of requested type.")
         } else {
             bail!("Cannot get the representation for a guest-owned resource.");
@@ -1582,6 +1636,7 @@ impl_unary!(
     [T: ComponentType] Box<T>,
     [T: ComponentType] Vec<T>,
     [T: ComponentType, U: ComponentType] Result<T, U>,
+    [] Result<(), ()>,
     [U: ComponentType] Result<(), U>,
     [T: ComponentType] Result<T, ()>,
 );

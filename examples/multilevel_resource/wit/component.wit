@@ -1,0 +1,32 @@
+package test:guest;
+
+interface error {
+    resource error {
+        constructor();
+    }
+}
+
+interface streams {
+    use error.{error};
+
+    resource streams-error {
+        constructor();
+    }
+}
+
+interface types {
+    use streams.{error, streams-error};
+
+    borrow-error: func(err: borrow<error>);
+    borrow-streams-error: func(error-inner: borrow<streams-error>);
+}
+
+interface run {
+    start: func();
+}
+
+world guest {
+    import types;
+
+    export run;
+}

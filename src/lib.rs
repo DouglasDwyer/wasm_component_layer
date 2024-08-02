@@ -1261,31 +1261,26 @@ impl Instance {
         map: &FxHashMap<ResourceType, ResourceType>,
     ) -> Result<Arc<[crate::types::ValueType]>> {
         let mut types = Vec::with_capacity(component.0.resolve.types.len());
-        for (id, val) in &component.0.resolve.types {
+        for (mut id, mut val) in &component.0.resolve.types {
             assert!(
                 types.len() == id.index(),
                 "Type definition IDs were not equal."
             );
 
-            match val.kind {
-                TypeDefKind::Resource => {
-                    types.push(crate::types::ValueType::Bool);
-                    continue;
-                }
-                TypeDefKind::Type(Type::Id(x)) => {
-                    if component.0.resolve.types[x].kind == TypeDefKind::Resource {
-                        types.push(crate::types::ValueType::Bool);
-                        continue;
-                    }
-                }
-                _ => {}
-            };
+            while let TypeDefKind::Type(Type::Id(id_ref)) = val.kind {
+                id = id_ref; // TODO: Should I change the id for `from_component_typedef` in L:1278?
+                val = &component.0.resolve.types[id_ref];
+            }
 
-            types.push(crate::types::ValueType::from_component_typedef(
-                id,
-                &component.0,
-                Some(map),
-            )?);
+            if val.kind == TypeDefKind::Resource {
+                types.push(crate::types::ValueType::Bool);
+            } else {
+                types.push(crate::types::ValueType::from_component_typedef(
+                    id,
+                    &component.0,
+                    Some(map),
+                )?);
+            }
         }
         Ok(types.into())
     }

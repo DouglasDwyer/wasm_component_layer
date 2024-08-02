@@ -1,2 +1,2 @@
 cargo build
-wasm-tools.exe component new target/wasm32-unknown-unknown/debug/single_component.wasm -o component.wasm
+wasm-tools.exe component new target/wasm32-unknown-unknown/debug/component_example.wasm -o component.wasm

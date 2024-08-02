@@ -1,0 +1,41 @@
+package test:guest;
+
+interface host {
+    record rect {
+      label: string,
+      sides: list<s16>,
+    }
+
+    variant event {
+        open,
+        close(u64),
+        click(click-type),
+    }
+
+    variant click-type {
+        up,
+        press(u8),
+        down,
+    }
+
+    param-list: func(param-s16: list<s16>);
+    param-record: func(param-record: event);
+    param-option: func(param-option: option<u16>);
+
+    param-result-all: func(result-all: result<u8, u8>);
+    param-result-ok: func(result-ok: result<u8>);
+    param-result-err: func(result-err: result<_, u8>);
+    param-result-none: func(result-none: result);
+
+    param-mult: func(param-list: list<string>, param-record: event, param-option: option<string>, result-all: result<string, string>);
+}
+
+interface run {
+    start: func();
+}
+
+world guest {
+    import host;
+
+    export run;
+}

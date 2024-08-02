@@ -89,3 +89,20 @@ The following things have yet to be implemented:
 ## Optional features
 
 **serde** - Allows for the serialization of identifiers, types, and values. Note that serializing resources is not allowed, because resources may be tied to specific instances.
+
+## Examples
+```shell
+# EXAMPLE_NAME: [single_component|resource|multilevel_resource|...]
+
+# build example wasm file
+cd examples/EXAMPLE_NAME # cd examples/single_component
+rustup toolchain install nightly
+rustup override set nightly
+cargo build
+wasm-tools component new target/wasm32-unknown-unknown/debug/component_example.wasm -o component.wasm
+wasm-tools print component.wasm -o component.wat
+
+# run example in host implementation
+cd ../../
+cargo run --example EXAMPLE_NAME # cargo run --example single_component
+```
