@@ -1,0 +1,21 @@
+package test:guest;
+
+interface foo {
+    resource bar {
+        constructor(value: s32);
+
+        /// Returns the value of the resource. 
+        value: func() -> s32;
+    }
+}
+
+interface log {
+    /// Logs some output from the guest component.
+    log: func(message: string);
+}
+
+/// An example world for the component to target.
+world example {
+    import log;
+    export foo;
+}
