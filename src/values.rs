@@ -797,7 +797,7 @@ impl ResourceOwn {
     }
 
     /// Creates a new owned resource that is received from a guest.
-    pub fn new_guest(
+    pub(crate) fn new_guest(
         rep: i32,
         ty: ResourceType,
         store_id: u64,
