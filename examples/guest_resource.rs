@@ -14,6 +14,7 @@ pub fn main() {
 
     // Parse the component bytes and load its imports and exports.
     let component = Component::new(&engine, WASM).unwrap();
+
     // Create a linker that will be used to resolve the component's imports, if any.
     let mut linker = Linker::default();
 
@@ -23,7 +24,7 @@ pub fn main() {
         .unwrap();
 
     // Define the host function that the component can call.
-    // This is out `log` function that will be called by the guest component.
+    // This is our `log` function that will be called by the guest component.
     host_interface
         .define_func(
             "log",
@@ -59,15 +60,13 @@ pub fn main() {
     // Call the resource constructor for 'bar' using a direct function call
     let resource_constructor = interface.func("[constructor]bar").unwrap();
 
-    // We need to provide a mutable reference to the store, the arguments, and the results
-    let mut results = vec![Value::Own(ResourceOwn::new_guest(
-        69i32, // Can be anything, gets overwritten by the resource constructor
-        resource_type,
-        69u64, // Can be anything, gets overwritten by the resource constructor
-        None,
-    ))]; // Placeholder for the result
+    // We need to provide a mutable reference to store the results.
+    // This can be any Value type, as it will get overwritten by the result.
+    // It is a Value::Bool here but will be overwritten by a Value::Own(ResourceOwn)
+    // after we call the constructor.
+    let mut results = vec![Value::Bool(false)];
 
-    // Construct the resource
+    // Construct the resource with the argument `42`
     resource_constructor
         .call(&mut store, &[Value::S32(42)], &mut results)
         .unwrap();
@@ -77,31 +76,23 @@ pub fn main() {
         _ => panic!("Unexpected result type"),
     };
 
-    // Verify the resource
-    println!("Resource created with id: {:?}", resource);
-
-    // TODO: How do we call value() method on the guest resource?
-    // print all funcs on the interface
-    for func in interface.funcs() {
-        println!("func: {:?}", func.0);
-    }
-
-    // Get the `value` function of the `bar` resource
-    let method_bar_value = interface.func("[method]bar.value").unwrap();
-
     let borrow_res = resource.borrow(store.as_context_mut()).unwrap();
     let arguments = vec![Value::Borrow(borrow_res)];
 
     let mut results = vec![Value::S32(0)];
 
-    // Call the method `bar.value` mutate the result
+    // Get the `value` method of the `bar` resource
+    let method_bar_value = interface.func("[method]bar.value").unwrap();
+
+    // Call the method `bar.value`, mutate the result
     method_bar_value
         .call(&mut store, &arguments, &mut results)
         .unwrap();
 
     match results[0] {
         Value::S32(v) => {
-            println!("Resource value: {}", v);
+            println!("[ResultLog]");
+            println!(" └ bar.value() = {}", v);
             assert_eq!(v, 42);
         }
         _ => panic!("Unexpected result type"),
