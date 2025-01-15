@@ -55,7 +55,6 @@ pub fn main() {
 
     // Get the function for creating and using a resource.
     let resource_type = interface.resource("bar").unwrap();
-    let resource = resource_type.name().unwrap();
 
     // Call the resource constructor for 'bar' using a direct function call
     let resource_constructor = interface.func("[constructor]bar").unwrap();
