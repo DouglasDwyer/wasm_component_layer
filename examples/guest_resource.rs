@@ -54,9 +54,6 @@ pub fn main() {
         .instance(&"test:guest/foo".try_into().unwrap())
         .unwrap();
 
-    // Get the function for creating and using a resource.
-    let resource_type = interface.resource("bar").unwrap();
-
     // Call the resource constructor for 'bar' using a direct function call
     let resource_constructor = interface.func("[constructor]bar").unwrap();
 
