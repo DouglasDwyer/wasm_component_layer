@@ -1,0 +1,24 @@
+cargo-features = ["per-package-target"]
+
+[package]
+name = "guest_resource"
+version = "0.1.0"
+edition = "2021"
+
+forced-target = "wasm32-unknown-unknown"
+
+[dependencies]
+wit-bindgen = { version = "0.37.0" }
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+codegen-units = 1
+opt-level = "s"
+debug = false
+strip = true
+lto = true
+
+[package.metadata.component]
+package = "component:guest-resource"
