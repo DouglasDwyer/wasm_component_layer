@@ -1,12 +1,13 @@
-#![allow(dead_code)]
-#[allow(warnings)]
-#[cfg_attr(rustfmt, rustfmt_skip)]
-mod bindings;
+wit_bindgen::generate!({
+    path: "wit/world.wit"
+});
+
+export!(Component);
 
 use std::cell::RefCell;
 
-use bindings::exports::test::guest::foo::{Guest, GuestBar};
-use bindings::test::guest::log::log;
+use exports::test::guest::foo::{Guest, GuestBar};
+use test::guest::log::log;
 
 struct Component {
     val: RefCell<i32>,
@@ -28,5 +29,3 @@ impl GuestBar for Component {
         *self.val.borrow()
     }
 }
-
-bindings::export!(Component with_types_in bindings);
