@@ -4,3 +4,4 @@
 /examples/*/target/
 /examples/*/Cargo.lock
 /examples/*/component.wat
+examples/guest_resource/src/bindings.rs
