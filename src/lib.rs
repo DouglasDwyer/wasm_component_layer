@@ -2259,3 +2259,14 @@ impl HandleTable {
         Ok(self.array.remove(i as usize))
     }
 }
+
+/// Ensures that [`Store`] implements thread-safe autotraits
+/// whenever possible.
+#[allow(unused)]
+fn assert_store_threadsafe<E: Send + Sync + backend::WasmEngine>() {
+    assert_threadsafe_autotraits::<StoreInner<(), E>>();
+}
+
+/// Ensures that the provided type implements [`Sized`],
+/// [`Send`], [`Sync`], and [`Unpin`].
+fn assert_threadsafe_autotraits<T: Sized + Send + Sync + Unpin>() {}
