@@ -68,6 +68,8 @@ impl Func {
         mut ctx: C,
         ty: FuncType,
         f: impl 'static
+            + Send
+            + Sync
             + Fn(StoreContextMut<C::UserState, C::Engine>, &[Value], &mut [Value]) -> Result<()>,
     ) -> Self {
         let mut ctx_mut = ctx.as_context_mut();
@@ -1213,7 +1215,7 @@ impl<P: ComponentList, R: ComponentList> TypedFunc<P, R> {
     /// Creates a new function, wrapping the given closure.
     pub fn new<C: AsContextMut>(
         ctx: C,
-        f: impl 'static + Fn(StoreContextMut<C::UserState, C::Engine>, P) -> Result<R>,
+        f: impl 'static + Send + Sync + Fn(StoreContextMut<C::UserState, C::Engine>, P) -> Result<R>,
     ) -> Self {
         let mut params_results = vec![ValueType::Bool; P::LEN + R::LEN];
         P::into_tys(&mut params_results[..P::LEN]);
@@ -1387,7 +1389,7 @@ impl<const N: usize> ByteArray for [u8; N] {
 
 /// The type of a dynamic host function.
 type FunctionBacking<T, E> =
-    dyn 'static + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
+    dyn 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>;
 
 /// The type of the key used in the vector of host functions.
 type FunctionBackingKeyPair<T, E> = (Arc<AtomicUsize>, Arc<FunctionBacking<T, E>>);
@@ -1402,7 +1404,7 @@ impl<T, E: backend::WasmEngine> FuncVec<T, E> {
     /// Pushes a new function into the vector.
     pub fn push(
         &mut self,
-        f: impl 'static + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>,
+        f: impl 'static + Send + Sync + Fn(StoreContextMut<T, E>, &[Value], &mut [Value]) -> Result<()>,
     ) -> Arc<AtomicUsize> {
         if self.functions.capacity() == self.functions.len() {
             self.clear_dead_functions();
